@@ -1,0 +1,27 @@
+(define (domain consecutive-numbers)
+    (:requirements
+        :typing :equality :list-comprehensions :facts
+        :negative-preconditions :modal-preconditions
+    )
+
+    (:types
+        number
+        even - number
+        odd - number
+    )
+
+    (:predicates
+        (has ?i - agent ?n - number)
+        (:fact consecutive ?m ?n - number)
+    )
+
+    (:event e-ann
+        :parameters (?i ?j - agent ?n - number)
+        :precondition (not ([?i] (has ?j ?n)))
+    )
+
+    (:action ann
+        :parameters (?i ?j - agent ?n - number | (/= ?i ?j))
+        :action-type (basic (e-ann ?i ?j ?n) )
+    )
+)

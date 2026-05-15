@@ -1,0 +1,69 @@
+suite_name: full
+cores: 30
+
+defaults:
+  time_limit_seconds: 300
+  memory_limit_gb: 8
+
+solvers:
+  - name: bfs
+  - name: bfsdc
+  - name: bfsdcu
+  - name: astar
+  - name: greedy
+  - name: ngreedy
+  - name: solution_finder
+  - name: bestfirst
+    search_path: jp/search_algorithms/best_first.py
+  - name: weightedastar
+    search_path: jp/search_algorithms/weighted_astar.py
+  - name: dfbb
+  - name: beamsearch
+    search_path: jp/search_algorithms/beam_search.py
+  - name: cabs
+  - name: cbfs
+    search_path: jp/search_algorithms/cbfs.py
+    search_options:
+      base_heuristic: goal_counting
+      novelty_heuristic: iw_gc
+  - name: acps
+    search_path: jp/search_algorithms/acps.py
+    search_options:
+      base_heuristic: goal_counting
+      novelty_heuristic: iw_gc
+      init: 1
+      step: 1
+      width_bound: 16
+      reset: false
+  - name: lnbs
+    search_path: jp/search_algorithms/lnbs.py
+    search_options:
+      base_heuristic: goal_counting
+      novelty_heuristic: iw_gc
+      initial_beam_size: 4
+      max_beam_size: 16
+      keep_all_layers: true
+      seed: 2023
+      max_repair_attempts: 6
+      cabs_initial_beam_size: 1
+      cabs_max_beam_size: 16
+
+domains:
+  - name: bbl
+    instances: all
+  - name: coin
+    instances: all
+  - name: corridor
+    instances: all
+  - name: gossip4
+    instances: all
+  - name: grapevine
+    instances: all
+  - name: grid
+    instances: all
+  - name: muddy_children
+    instances: all
+  - name: new_corridor
+    instances: all
+  - name: thief
+    instances: all

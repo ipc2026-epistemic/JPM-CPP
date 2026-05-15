@@ -1,0 +1,25 @@
+suite_name: smoke
+cores: 1
+
+defaults:
+  time_limit_seconds: 300
+  memory_limit_gb: 8
+
+solvers:
+  - name: bfsdc
+  - name: bestfirst
+    search_path: jp/search_algorithms/best_first.py
+  - name: weightedastar
+    search_path: jp/search_algorithms/weighted_astar.py
+  - name: dfbb
+  - name: beamsearch
+    search_path: jp/search_algorithms/beam_search.py
+  - name: cabs
+
+domains:
+  - name: coin
+    instances:
+      - problem_07.pddl
+  - name: bbl
+    instances:
+      - problem01.pddl

@@ -1,0 +1,171 @@
+# Apptainer multi-stage definition for the JPM C++ EPDDL bridge runner
+# Build from the repository root:
+#   apptainer build jpm_cpp.sif Apptainer.demo_jpm_cpp
+#
+# Default runscript, matching the plank demo planner style:
+#   apptainer run jpm_cpp.sif <specification.json> <plan.json>
+#
+# Runtime environment overrides:
+#   SEARCH=cbfs
+#   TIMEOUT=300
+#   MAX_EXPANDED=1000000
+#   SEARCH_OPTIONS_JSON='{"beam_size": 16}'
+#   PLANK_BINARY=/opt/jpm_cpp/app/plank/build/plank
+
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: build
+
+%labels
+    Name JPM-CPP-build
+
+%files
+    cpp /src/cpp
+    jp /src/jp
+    tools /src/tools
+    benchmarks /src/benchmarks
+    converted_from_epddl /src/converted_from_epddl
+    ../plank/build/plank /src/plank/build/plank
+    pyproject.toml /src/pyproject.toml
+    README.md /src/README.md
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        build-essential \
+        cmake \
+        gcc-14 \
+        g++-14
+
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 200 || true
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 200 || true
+
+    export CC=/usr/bin/gcc-14
+    export CXX=/usr/bin/g++-14
+
+    cd /src
+    rm -rf cpp/build
+    cmake -S cpp -B cpp/build \
+        -DCMAKE_C_COMPILER=/usr/bin/gcc-14 \
+        -DCMAKE_CXX_COMPILER=/usr/bin/g++-14
+    cmake --build cpp/build -j"$(nproc)"
+
+    install -Dm755 cpp/build/jpm_cpp_solver /opt/jpm_cpp/app/cpp/build/jpm_cpp_solver
+    install -Dm755 plank/build/plank /opt/jpm_cpp/app/plank/build/plank
+    install -Dm755 tools/export_jpm_ir.py /opt/jpm_cpp/app/tools/export_jpm_ir.py
+    install -Dm755 tools/run_epddl_jpm_planner.py /opt/jpm_cpp/app/tools/run_epddl_jpm_planner.py
+    cp -r tools/epddl_to_fpddl /opt/jpm_cpp/app/tools/epddl_to_fpddl
+    cp -r benchmarks /opt/jpm_cpp/app/benchmarks
+    cp -r converted_from_epddl /opt/jpm_cpp/app/converted_from_epddl
+    cp -r jp /opt/jpm_cpp/app/jp
+    mkdir -p /opt/jpm_cpp/app/logs
+
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/opt/jpm_cpp/app/cpp/build:$PATH
+    export JPM_CPP_APP=/opt/jpm_cpp/app
+
+
+Bootstrap: docker
+From: ubuntu:24.04
+Stage: run
+
+%labels
+    Name JPM-CPP-runtime
+
+%files from build
+    /opt/jpm_cpp/app /opt/jpm_cpp/app
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libstdc++6 \
+        python3 \
+        python3-tz
+
+    chmod +x /opt/jpm_cpp/app/cpp/build/jpm_cpp_solver
+    chmod +x /opt/jpm_cpp/app/plank/build/plank
+    chmod +x /opt/jpm_cpp/app/tools/export_jpm_ir.py
+    chmod +x /opt/jpm_cpp/app/tools/run_epddl_jpm_planner.py
+
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/opt/jpm_cpp/app/cpp/build:$PATH
+    export JPM_CPP_APP=/opt/jpm_cpp/app
+    export PLANK_BINARY=/opt/jpm_cpp/app/plank/build/plank
+    export SEARCH=cbfs
+    export TIMEOUT=300
+    export MAX_EXPANDED=1000000
+
+%runscript
+    set -eu
+
+    if [ "$#" -eq 2 ] && [ "${1#-}" = "$1" ] && [ "${2#-}" = "$2" ]; then
+        SPECFILE="$1"
+        PLANFILE="$2"
+        exec python3 /opt/jpm_cpp/app/tools/run_epddl_jpm_planner.py \
+            --spec "$SPECFILE" \
+            --plan-file "$PLANFILE"
+    fi
+
+    if [ "$#" -eq 0 ]; then
+        echo "usage: apptainer run IMAGE.sif <specification.json> <plan.json>" >&2
+        echo "   or: apptainer run IMAGE.sif -d DOMAIN -p PROBLEM [-l LIBS ...] --plan-file PLAN.json" >&2
+        echo "env overrides: SEARCH, TIMEOUT, MAX_EXPANDED, SEARCH_OPTIONS_JSON, PLANK_BINARY" >&2
+        echo "tip: use 'apptainer exec IMAGE.sif /opt/jpm_cpp/app/cpp/build/jpm_cpp_solver --help' for direct IR solving" >&2
+        exit 2
+    fi
+
+    exec python3 /opt/jpm_cpp/app/tools/run_epddl_jpm_planner.py "$@"
+
+## Define meta data
+%labels
+Name                            JPM-CPP
+Description                     JPM C++ runner for finite-domain F-PDDL tasks with default CBFS search
+DefaultSearch                   cbfs
+AvailableSearchAlgorithms       bfs,bfsdc,bfsdcu,astar,greedy,bestfirst,cbfs,acps,beamsearch,cabs,lnbs
+InputFormat                     F-PDDL domain/problem via Python-side export to JPM IR
+SupportsFPPDDL                  yes
+SupportsNativeEPDDL             no
+SupportsJPMIR                   yes
+SupportsTyping                  yes
+SupportsFiniteDomainState       yes
+SupportsConjunctivePreconditions yes
+SupportsConjunctiveGoals        yes
+SupportsOnticActions            yes
+SupportsAssignEffects           yes
+SupportsIncreaseDecrease        yes
+SupportsEquality                yes
+SupportsInequality              yes
+SupportsPartialObservability    yes
+SupportsVisibilityModels        yes
+SupportsModalPreconditions      limited
+SupportsModalGoals              limited
+SupportsModalEffects            limited
+SupportsIndividualKnowledge     yes
+SupportsIndividualSeeing        yes
+SupportsIndividualBelief        yes
+SupportsJPReads                 yes
+SupportsJPAssignments           yes
+SupportsEPAssignments           yes
+SupportsGroupModalities         no
+SupportsCommonKnowledge         no
+SupportsMultiAgentEpQueries     no
+SupportsConditionalEffects      no
+SupportsDisjunctivePreconditions no
+SupportsDisjunctiveGoals        no
+SupportsExistentialPreconditions no
+SupportsUniversalPreconditions  no
+SupportsExistentialGoals        no
+SupportsUniversalGoals          no
+SupportsActionTypeLibraries     no

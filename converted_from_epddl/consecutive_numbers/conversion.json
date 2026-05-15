@@ -1,0 +1,12 @@
+{
+  "generated_problem_files": [
+    "cn_5_from_epddl.pddl"
+  ],
+  "grounded_json_files": [
+    "cn5.json"
+  ],
+  "grounding_failures": [],
+  "notes": "Converted to a generated finite-state F-PDDL family that tracks the remaining alive DEL worlds as a single belief-state variable. Each EPDDL announcement instance is compiled into a state transition, allowing direct round-tripping back to the original ann_* EPDDL action names for validator checks.",
+  "source_domain": "Consecutive-Numbers",
+  "support_level": "supported"
+}

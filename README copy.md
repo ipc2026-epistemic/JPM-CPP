@@ -1,0 +1,110 @@
+# bpwp
+
+## Installation
+
+1. **Create and activate a virtual environment** (recommended to isolate dependencies):
+
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+   ```
+
+2. **Install the project dependencies** (`numpy` and `pytz`):
+
+   ```bash
+   pip install -e .
+   ```
+
+3. **Create a logs directory** (the runner expects this folder to exist for its log files):
+
+   ```bash
+   mkdir logs
+   ```
+
+## Running an Example
+
+The project comes with several examples in the `examples/` folder. You can run any of them using the `runner.py` script from the project root.
+
+To run the **Coin** example, use the following command:
+
+```bash
+python runner.py -d examples/coin/domain.pddl -p examples/coin/problem01.pddl -e examples/coin/coin.py
+```
+
+### CLI Arguments
+
+- `-d` or `--domain`: Path to the PDDL domain file
+- `-p` or `--problem`: Path to the PDDL problem file
+- `-e` or `--external`: Path to the external Python function file associated with the domain
+
+## Running Benchmarks
+
+The repository now includes a YAML-driven benchmark runner for the domains under `benchmarks/`. It ignores `heterogeneous_benchmarks/` by design and resolves solver-instance jobs only from the standard benchmark tree.
+
+To validate a benchmark config without launching any solver processes:
+
+```bash
+python -m jp.benchmark_runner -c benchmarks/config/simple.yaml --dry-run
+```
+
+To run the sample smoke suite and write all outputs into one directory:
+
+```bash
+python -m jp.benchmark_runner -c benchmarks/config/simple.yaml -o output/benchmark_simple
+```
+
+The benchmark runner writes:
+
+- `benchmark_manifest.json`: the resolved suite config and expanded solver-instance jobs
+- `benchmark_results.json`: one JSON result per job plus aggregate counts by solver and domain
+- Existing per-instance `.log` and `.json` files emitted by `jp.instance_runner`
+
+### Benchmark YAML Schema
+
+```yaml
+suite_name: my-suite
+cores: 4
+
+defaults:
+  time_limit_seconds: 300
+  memory_limit_gb: 8
+
+solvers:
+  - name: bfsdc
+  - name: greedy
+    time_limit_seconds: 120
+    memory_limit_gb: 4
+  - name: acps
+    search_path: jp/search_algorithms/acps.py
+    search_options:
+      init: 1
+      step: 1
+      width_bound: 16
+      base_heuristic: goal_counting
+      novelty_heuristic: iw_gc
+
+domains:
+  - name: coin
+    instances:
+      - problem_0*.pddl
+      - problem_07.pddl
+  - name: gossip4
+    exclude_instances:
+      - problem_03.pddl
+```
+
+Notes:
+
+- `cores` limits how many solver processes run concurrently.
+- Solver entries can override the default time and memory limits.
+- Solver entries can also provide `search_options`, a YAML mapping that is passed into solvers that accept per-algorithm settings. The benchmark runner serializes it into the subprocess call, so the same config works for dry runs and full runs.
+- Domain `instances` accepts exact filenames or glob patterns. Use `all` or omit the field to include every problem in that domain.
+- If a benchmark domain has more than one `.py` file, add `external: <path>` to the domain entry.
+
+Available modern search modules under [jp/search_algorithms](jp/search_algorithms) now include `cbfs`, `acps`, and a repo-native sequential `lnbs` implementation in addition to `best_first`, `beam_search`, `weighted_astar`, `dfbb`, and `cabs`.
+
+## Guides
+
+- [EPDDL_TO_FPDDL_WORKFLOW.md](EPDDL_TO_FPDDL_WORKFLOW.md): end-to-end workflow for grounding an EPDDL instance, converting it to F-PDDL, solving it with JPM, translating the plan back, and validating it in `plank`
+- [converted_from_epddl/README.md](converted_from_epddl/README.md): current converted-benchmark status table and validation summary
+- [cpp/README.md](cpp/README.md): first C++ JPM runtime prototype and smoke-test commands
