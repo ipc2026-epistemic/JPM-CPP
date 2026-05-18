@@ -18,8 +18,9 @@ from epddl_to_fpddl.common import (
     copy_tree_file,
     fpddl_name,
     load_json,
+    sanitize_epddl_inputs,
 )
-from epddl_to_fpddl.converters import CONVERTERS, write_json
+from epddl_to_fpddl.converters import CONVERTERS, convert_tiger_from_sources, write_json
 
 
 DOMAIN_SPECS = {
@@ -93,10 +94,16 @@ DOMAIN_SPECS = {
     ),
     "Tiger": DomainSpec(
         source_dir="Tiger",
-        library_file="intermediate.epddl",
-        support_level="unsupported",
-        notes="The bundled EPDDL problem file currently fails to parse in plank and has no F-PDDL mapping yet.",
+        library_file="basic.epddl",
+        support_level="supported",
+        notes=(
+            "Converted to a generated Tiger belief-state F-PDDL family. The source benchmark "
+            "is normalized on the fly to replace the zero-parameter left/right move actions "
+            "with explicit room-to-room public ontic moves so updated plank builds can still "
+            "validate translated plans."
+        ),
         target_dir="tiger",
+        converter_name="tiger",
     ),
     "Collaboration-through-Communication": DomainSpec(
         source_dir="Collaboration-through-Communication",
@@ -115,7 +122,10 @@ DOMAIN_SPECS = {
         source_dir="Selective-Communication",
         library_file="intermediate.epddl",
         support_level="unsupported",
-        notes="The bundled EPDDL domain currently has action-type parse issues and no F-PDDL mapping yet.",
+        notes=(
+            "The bundled EPDDL domain still hits parser compatibility issues under the "
+            "newer plank build and has no F-PDDL mapping yet."
+        ),
         target_dir="selective_communication",
     ),
 }
@@ -128,9 +138,16 @@ def export_ground_json(
     output_dir: Path,
     plank_binary: Path,
 ) -> Path:
+    libraries = [PLANK_ROOT / "benchmarks" / "libraries" / library_file] if library_file else []
+    domain_path, problem_path, libraries = sanitize_epddl_inputs(
+        domain_path,
+        problem_path,
+        libraries,
+        output_dir / "_sanitized_inputs",
+    )
     cmd = [str(plank_binary), "export", "-d", str(domain_path), "-p", str(problem_path)]
-    if library_file:
-        cmd.extend(["-l", str(PLANK_ROOT / "benchmarks" / "libraries" / library_file)])
+    if libraries:
+        cmd.extend(["-l", *[str(path) for path in libraries]])
     cmd.extend(["-o", str(output_dir)])
     result = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=PLANK_ROOT / "build")
     json_path = output_dir / f"{problem_path.stem}.json"
@@ -235,6 +252,23 @@ def convert_supported_domain(
     target_dir: Path,
     plank_binary: Path,
 ) -> dict[str, Any]:
+    if spec.converter_name == "tiger":
+        generated_problem_files: list[str] = []
+        for problem_path in problem_paths:
+            problem_name = f"{fpddl_name(problem_path.stem)}_from_epddl"
+            result = convert_tiger_from_sources(domain_path, problem_path, target_dir, problem_name)
+            generated_problem_files.extend(result["problem_files"])
+        metadata = {
+            "source_domain": spec.source_dir,
+            "support_level": spec.support_level,
+            "notes": spec.notes,
+            "generated_problem_files": sorted(set(generated_problem_files)),
+            "grounded_json_files": [],
+            "grounding_failures": [],
+        }
+        write_json(target_dir / "conversion.json", metadata)
+        return metadata
+
     converter = CONVERTERS[spec.converter_name]
     grounded_dir = target_dir / "grounded"
     grounded_records, failures = export_groundings(

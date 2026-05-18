@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import shutil
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -712,6 +715,351 @@ def convert_consecutive_numbers(task: dict[str, Any], output_dir: Path, problem_
     return {
         "problem_files": [problem_path.name],
         "support_files": ["domain.pddl", "consecutive_numbers.py"],
+    }
+
+
+@dataclass(frozen=True)
+class TigerWorld:
+    princess_room: str
+    tiger_rooms: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TigerSpec:
+    rooms: tuple[str, ...]
+    actual_knight_room: str
+    actual_princess_room: str
+    actual_tiger_rooms: tuple[str, ...]
+    right_edges: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class TigerState:
+    knight_room: str
+    opened_rooms: tuple[str, ...]
+    saved_princess: bool
+    alive_world_ids: tuple[int, ...]
+
+
+def parse_tiger_room_order(problem_text: str) -> tuple[str, ...]:
+    match = re.search(r"\(:objects(?P<body>.*?)\)\s*\n\s*\(:facts-init", problem_text, re.DOTALL)
+    if match is None:
+        raise ValueError("Tiger converter could not locate :objects declaration")
+    body = match.group("body")
+    room_chunk = re.search(r"([A-Za-z0-9_\-\s]+)-\s*room", body)
+    if room_chunk is None:
+        raise ValueError("Tiger converter could not recover room objects")
+    rooms = tuple(token for token in room_chunk.group(1).split() if token)
+    if not rooms:
+        raise ValueError("Tiger converter found no rooms in :objects")
+    return rooms
+
+
+def parse_tiger_edges(problem_text: str) -> tuple[tuple[str, str], ...]:
+    facts_match = re.search(r"\(:facts-init(?P<body>.*?)\)\s*\n\s*\(:init", problem_text, re.DOTALL)
+    if facts_match is None:
+        raise ValueError("Tiger converter could not locate :facts-init")
+    body = facts_match.group("body")
+    edges = tuple(re.findall(r"\(neighbor\s+([A-Za-z0-9_-]+)\s+([A-Za-z0-9_-]+)\)", body))
+    if not edges:
+        raise ValueError("Tiger converter found no neighbor facts")
+    return edges
+
+
+def parse_tiger_spec(problem_path: Path) -> TigerSpec:
+    text = problem_path.read_text()
+    rooms = parse_tiger_room_order(text)
+
+    knight_match = re.search(r"\(at-knight\s+([A-Za-z0-9_-]+)\)", text)
+    princess_match = re.search(r"\(at-princess\s+([A-Za-z0-9_-]+)\)", text)
+    tiger_rooms = tuple(re.findall(r"\(tiger\s+([A-Za-z0-9_-]+)\)", text))
+
+    if knight_match is None or princess_match is None or not tiger_rooms:
+        raise ValueError("Tiger converter could not recover the designated world from :init")
+
+    return TigerSpec(
+        rooms=rooms,
+        actual_knight_room=knight_match.group(1),
+        actual_princess_room=princess_match.group(1),
+        actual_tiger_rooms=tuple(sorted(tiger_rooms)),
+        right_edges=parse_tiger_edges(text),
+    )
+
+
+def tiger_hidden_worlds(spec: TigerSpec) -> list[TigerWorld]:
+    tiger_count = len(spec.actual_tiger_rooms)
+    worlds: list[TigerWorld] = []
+    for princess_room in spec.rooms:
+        candidates = [room for room in spec.rooms if room != princess_room]
+        for tiger_rooms in itertools.combinations(candidates, tiger_count):
+            worlds.append(TigerWorld(princess_room, tuple(sorted(tiger_rooms))))
+    return worlds
+
+
+def tiger_actual_world_id(worlds: list[TigerWorld], spec: TigerSpec) -> int:
+    target = TigerWorld(spec.actual_princess_room, tuple(sorted(spec.actual_tiger_rooms)))
+    for idx, world in enumerate(worlds):
+        if world == target:
+            return idx
+    raise ValueError("Tiger converter could not locate the designated hidden world")
+
+
+def tiger_right_map(spec: TigerSpec) -> dict[str, str]:
+    return dict(spec.right_edges)
+
+
+def tiger_left_map(spec: TigerSpec) -> dict[str, str]:
+    return {right: left for left, right in spec.right_edges}
+
+
+def tiger_truth_partition(
+    worlds: list[TigerWorld], alive_ids: tuple[int, ...], predicate
+) -> set[bool]:
+    return {predicate(worlds[idx]) for idx in alive_ids}
+
+
+def tiger_knows_tiger(worlds: list[TigerWorld], alive_ids: tuple[int, ...], room: str) -> bool:
+    return len(tiger_truth_partition(worlds, alive_ids, lambda world: room in world.tiger_rooms)) == 1
+
+
+def tiger_known_tiger_value(
+    worlds: list[TigerWorld], alive_ids: tuple[int, ...], room: str
+) -> bool | None:
+    values = tiger_truth_partition(worlds, alive_ids, lambda world: room in world.tiger_rooms)
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def tiger_knows_princess(worlds: list[TigerWorld], alive_ids: tuple[int, ...], room: str) -> bool:
+    return len(tiger_truth_partition(worlds, alive_ids, lambda world: world.princess_room == room)) == 1
+
+
+def tiger_known_princess_value(
+    worlds: list[TigerWorld], alive_ids: tuple[int, ...], room: str
+) -> bool | None:
+    values = tiger_truth_partition(worlds, alive_ids, lambda world: world.princess_room == room)
+    return next(iter(values)) if len(values) == 1 else None
+
+
+def tiger_goal_holds(spec: TigerSpec, worlds: list[TigerWorld], state: TigerState) -> bool:
+    return state.saved_princess and all(
+        tiger_knows_tiger(worlds, state.alive_world_ids, room) for room in spec.rooms
+    )
+
+
+def tiger_successors(
+    spec: TigerSpec,
+    worlds: list[TigerWorld],
+    actual_world_id: int,
+    state: TigerState,
+) -> list[tuple[str, TigerState]]:
+    actual_world = worlds[actual_world_id]
+    right_map = tiger_right_map(spec)
+    left_map = tiger_left_map(spec)
+    room = state.knight_room
+    successors: list[tuple[str, TigerState]] = []
+
+    if room in left_map:
+        to_room = left_map[room]
+        successors.append(
+            (
+                f"left_{room}_{to_room}",
+                TigerState(to_room, state.opened_rooms, state.saved_princess, state.alive_world_ids),
+            )
+        )
+    if room in right_map:
+        to_room = right_map[room]
+        successors.append(
+            (
+                f"right_{room}_{to_room}",
+                TigerState(to_room, state.opened_rooms, state.saved_princess, state.alive_world_ids),
+            )
+        )
+
+    if not tiger_knows_tiger(worlds, state.alive_world_ids, room):
+        actual_has_tiger = room in actual_world.tiger_rooms
+        filtered = tuple(
+            world_id
+            for world_id in state.alive_world_ids
+            if ((room in worlds[world_id].tiger_rooms) == actual_has_tiger)
+        )
+        successors.append(
+            (
+                f"listen_{room}",
+                TigerState(room, state.opened_rooms, state.saved_princess, filtered),
+            )
+        )
+
+    if not tiger_knows_princess(worlds, state.alive_world_ids, room):
+        actual_has_princess = actual_world.princess_room == room
+        filtered = tuple(
+            world_id
+            for world_id in state.alive_world_ids
+            if ((worlds[world_id].princess_room == room) == actual_has_princess)
+        )
+        successors.append(
+            (
+                f"look_{room}",
+                TigerState(room, state.opened_rooms, state.saved_princess, filtered),
+            )
+        )
+
+    known_tiger = tiger_known_tiger_value(worlds, state.alive_world_ids, room)
+    if room not in state.opened_rooms and known_tiger is False:
+        successors.append(
+            (
+                f"open_{room}",
+                TigerState(
+                    room,
+                    tuple(sorted((*state.opened_rooms, room))),
+                    state.saved_princess,
+                    state.alive_world_ids,
+                ),
+            )
+        )
+
+    known_princess = tiger_known_princess_value(worlds, state.alive_world_ids, room)
+    if not state.saved_princess and room in state.opened_rooms and known_princess is True:
+        successors.append(
+            (
+                f"save_princess_{room}",
+                TigerState(room, state.opened_rooms, True, state.alive_world_ids),
+            )
+        )
+
+    return successors
+
+
+def tiger_reachable_graph(
+    spec: TigerSpec,
+) -> tuple[list[TigerState], dict[tuple[int, str], int], set[int]]:
+    worlds = tiger_hidden_worlds(spec)
+    actual_world_id = tiger_actual_world_id(worlds, spec)
+    initial = TigerState(
+        spec.actual_knight_room,
+        tuple(),
+        False,
+        tuple(range(len(worlds))),
+    )
+
+    states = [initial]
+    state_ids = {initial: 0}
+    transitions: dict[tuple[int, str], int] = {}
+    queue: deque[TigerState] = deque([initial])
+
+    while queue:
+        current = queue.popleft()
+        source_id = state_ids[current]
+        for action_name, successor in tiger_successors(spec, worlds, actual_world_id, current):
+            if successor not in state_ids:
+                state_ids[successor] = len(states)
+                states.append(successor)
+                queue.append(successor)
+            transitions[(source_id, action_name)] = state_ids[successor]
+
+    goal_states = {
+        idx
+        for idx, state in enumerate(states)
+        if tiger_goal_holds(spec, worlds, state)
+    }
+    return states, transitions, goal_states
+
+
+def render_tiger_domain(spec: TigerSpec) -> str:
+    states, transitions, goal_states = tiger_reachable_graph(spec)
+    action_blocks: list[str] = []
+
+    for (source_id, action_name), target_id in sorted(transitions.items()):
+        goal_flag = "'t'" if target_id in goal_states else "'f'"
+        action_blocks.extend(
+            [
+                f"    (:action {action_name}__from_{source_id}_to_{target_id}",
+                "        :parameters ()",
+                "        :precondition (and",
+                f"            (= (belief_state) {source_id})",
+                "        )",
+                "        :effect (and",
+                f"            (assign (belief_state) {target_id})",
+                f"            (assign (goal_reached) {goal_flag})",
+                "        )",
+                "    )",
+                "",
+            ]
+        )
+
+    return "\n".join(
+        [
+            "(define",
+            "    (domain tiger_from_epddl)",
+            "",
+            "    (:types",
+            "        agent",
+            "    )",
+            "",
+            "    (:functions",
+            "        (belief_state)",
+            "        (goal_reached)",
+            "    )",
+            "",
+            *action_blocks,
+            ")",
+            "",
+        ]
+    )
+
+
+def render_tiger_problem(spec: TigerSpec, problem_name: str) -> str:
+    states, _transitions, goal_states = tiger_reachable_graph(spec)
+    initial_goal = "'t'" if 0 in goal_states else "'f'"
+    return "\n".join(
+        [
+            "(define",
+            f"    (problem {problem_name})",
+            "    (:domain tiger_from_epddl)",
+            "",
+            "    (:agents",
+            "        knight - agent",
+            "    )",
+            "",
+            "    (:objects",
+            "    )",
+            "",
+            "    (:init",
+            "        (assign (belief_state) 0)",
+            f"        (assign (goal_reached) {initial_goal})",
+            "    )",
+            "",
+            "    (:goal (and",
+            "        (= (goal_reached) 't')",
+            "    ))",
+            "",
+            "    (:ranges",
+            f"        (belief_state integer [0,{max(0, len(states) - 1)}])",
+            "        (goal_reached enumerate ['t','f'])",
+            "    )",
+            "",
+            "    (:rules",
+            "    )",
+            ")",
+            "",
+        ]
+    )
+
+
+def convert_tiger_from_sources(
+    domain_path: Path,
+    problem_path: Path,
+    output_dir: Path,
+    problem_name: str,
+) -> dict[str, Any]:
+    del domain_path  # The current Tiger converter is instance-driven from the source problem.
+    spec = parse_tiger_spec(problem_path)
+    (output_dir / "domain.pddl").write_text(render_tiger_domain(spec))
+    (output_dir / "tiger.py").write_text(render_all_visible_external("tiger_from_epddl"))
+    generated_problem = output_dir / f"{problem_name}.pddl"
+    generated_problem.write_text(render_tiger_problem(spec, problem_name))
+    return {
+        "problem_files": [generated_problem.name],
+        "support_files": ["domain.pddl", "tiger.py"],
     }
 
 

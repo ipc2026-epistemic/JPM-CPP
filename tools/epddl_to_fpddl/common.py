@@ -66,3 +66,150 @@ class DomainSpec:
     target_dir: str
     converter_name: str | None = None
 
+
+DOMAIN_NAME_RE = re.compile(r"\(define\s+\(domain\s+([^)]+)\)", re.IGNORECASE)
+
+TIGER_LEFT_BLOCK = """    ;--------------------LEFT------------------
+
+    (:event e-left
+        :precondition
+            (not
+                (exists (?room-from - room)
+                    (and (at-knight ?room-from) (leftmost ?room-from)) ))
+        :effects
+            (:forall (?room-from - (either room room))
+                (when (at-knight ?room-from)
+                    (:and
+                        (not (at-knight ?room-from))
+                        (:forall (?room-to - room | (neighbor ?room-to ?room-from))
+                            (at-knight ?room-to) ))))
+    )
+
+    (:action left
+        :parameters ()
+        :action-type (public-ontic (e-left))
+        :observability-conditions (Knight Fully)
+    )
+
+"""
+
+TIGER_LEFT_NORMALIZED = """    ;--------------------LEFT------------------
+
+    (:event e-left
+        :parameters (?room-from ?room-to - room)
+        :precondition (and (at-knight ?room-from) (neighbor ?room-to ?room-from))
+        :effects (:and
+            (not (at-knight ?room-from))
+            (at-knight ?room-to)
+        )
+    )
+
+    (:action left
+        :parameters (?room-from ?room-to - room)
+        :action-type (public-ontic (e-left ?room-from ?room-to))
+        :observability-conditions (Knight Fully)
+    )
+
+"""
+
+TIGER_RIGHT_BLOCK = """    ;--------------------RIGHT------------------
+
+    (:event e-right
+        :precondition
+            (not
+                (exists (?room-from - room)
+                    (and (at-knight ?room-from) (rightmost ?room-from)) ))
+        :effects
+            (:forall (?room-from - room)
+                (when (at-knight ?room-from)
+                    (:and
+                        (not (at-knight ?room-from))
+                        (:forall (?room-to - room | (neighbor ?room-from ?room-to))
+                            (at-knight ?room-to) ))))
+    )
+
+    (:action right
+        :parameters ()
+        :action-type (public-ontic (e-right))
+        :observability-conditions (Knight Fully)
+    )
+
+"""
+
+TIGER_RIGHT_NORMALIZED = """    ;--------------------RIGHT------------------
+
+    (:event e-right
+        :parameters (?room-from ?room-to - room)
+        :precondition (and (at-knight ?room-from) (neighbor ?room-from ?room-to))
+        :effects (:and
+            (not (at-knight ?room-from))
+            (at-knight ?room-to)
+        )
+    )
+
+    (:action right
+        :parameters (?room-from ?room-to - room)
+        :action-type (public-ontic (e-right ?room-from ?room-to))
+        :observability-conditions (Knight Fully)
+    )
+
+"""
+
+
+def epddl_domain_name(domain_path: Path) -> str | None:
+    match = DOMAIN_NAME_RE.search(domain_path.read_text())
+    if match is None:
+        return None
+    return match.group(1).strip().lower()
+
+
+def inject_problem_agents(problem_text: str, agents_clause: str) -> str:
+    if "(:agents" in problem_text:
+        return problem_text
+    marker = "    (:objects\n"
+    if marker in problem_text:
+        return problem_text.replace(marker, f"{agents_clause}\n{marker}", 1)
+    return problem_text
+
+
+def normalize_tiger_domain(domain_text: str) -> str:
+    text = domain_text.replace(
+        "    (:constants\n        Knight - agent\n    )\n\n",
+        "",
+    )
+    text = text.replace(TIGER_LEFT_BLOCK, TIGER_LEFT_NORMALIZED)
+    text = text.replace(TIGER_RIGHT_BLOCK, TIGER_RIGHT_NORMALIZED)
+    return text
+
+
+def sanitize_epddl_inputs(
+    domain_path: Path,
+    problem_path: Path,
+    libraries: list[Path],
+    scratch_dir: Path,
+) -> tuple[Path, Path, list[Path]]:
+    domain_name = epddl_domain_name(domain_path)
+    if domain_name is None:
+        return domain_path, problem_path, libraries
+
+    domain_text = domain_path.read_text()
+    problem_text = problem_path.read_text()
+    sanitized_domain = domain_text
+    sanitized_problem = problem_text
+
+    if domain_name == "blocks-world":
+        sanitized_domain = sanitized_domain.replace("\n    (:constants Robot - agent)\n", "\n")
+        sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Robot)\n")
+    elif domain_name == "tiger":
+        sanitized_domain = normalize_tiger_domain(sanitized_domain)
+        sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Knight)\n")
+
+    if sanitized_domain == domain_text and sanitized_problem == problem_text:
+        return domain_path, problem_path, libraries
+
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    sanitized_domain_path = scratch_dir / domain_path.name
+    sanitized_problem_path = scratch_dir / problem_path.name
+    sanitized_domain_path.write_text(sanitized_domain)
+    sanitized_problem_path.write_text(sanitized_problem)
+    return sanitized_domain_path, sanitized_problem_path, libraries

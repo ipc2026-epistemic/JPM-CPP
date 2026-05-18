@@ -19,8 +19,8 @@ if str(TOOLS_DIR) not in sys.path:
 
 from epddl_to_fpddl.common import CONVERTED_ROOT  # noqa: E402
 from epddl_to_fpddl.common import PLANK_BINARY as DEFAULT_HOST_PLANK_BINARY  # noqa: E402
-from epddl_to_fpddl.common import fpddl_name, load_json  # noqa: E402
-from epddl_to_fpddl.converters import CONVERTERS  # noqa: E402
+from epddl_to_fpddl.common import epddl_domain_name, fpddl_name, load_json, sanitize_epddl_inputs  # noqa: E402
+from epddl_to_fpddl.converters import CONVERTERS, convert_tiger_from_sources  # noqa: E402
 
 
 JPM_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +38,7 @@ SUPPORTED_DOMAINS = {
     "consecutive-numbers": "consecutive-numbers",
     "gossip": "gossip",
     "grapevine": "grapevine",
+    "tiger": "tiger",
 }
 
 TEMPLATE_DIRS = {
@@ -48,6 +49,7 @@ TEMPLATE_DIRS = {
     "consecutive-numbers": "consecutive_numbers",
     "gossip": "gossip",
     "grapevine": "grapevine",
+    "tiger": "tiger",
 }
 
 
@@ -185,6 +187,12 @@ def export_ground_task(
     libraries: list[Path],
     output_dir: Path,
 ) -> dict[str, Any]:
+    domain_path, problem_path, libraries = sanitize_epddl_inputs(
+        domain_path,
+        problem_path,
+        libraries,
+        output_dir.parent / "sanitized_inputs",
+    )
     print("Grounding...", end="", flush=True)
     cmd = [str(plank_binary), "export", "-d", str(domain_path), "-p", str(problem_path)]
     if libraries:
@@ -249,6 +257,28 @@ def convert_ground_task(task: dict[str, Any], output_dir: Path) -> tuple[str, Pa
         raise PlannerFailure("converter did not produce domain/problem files")
     print("done.")
     return domain_key, domain_path, problem_path
+
+
+def convert_source_tiger(domain_path: Path, problem_path: Path, output_dir: Path) -> tuple[str, Path, Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print("Converting...", end="", flush=True)
+    result = convert_tiger_from_sources(
+        domain_path,
+        problem_path,
+        output_dir,
+        f"{fpddl_name(problem_path.stem)}_from_epddl",
+    )
+    problem_files = result.get("problem_files", [])
+    if len(problem_files) != 1:
+        raise PlannerFailure(
+            f"expected exactly one generated F-PDDL problem, got {problem_files!r}"
+        )
+    domain_file = output_dir / "domain.pddl"
+    problem_file = output_dir / problem_files[0]
+    if not domain_file.exists() or not problem_file.exists():
+        raise PlannerFailure("Tiger converter did not produce domain/problem files")
+    print("done.")
+    return "tiger", domain_file, problem_file
 
 
 def solve_with_cpp(
@@ -364,6 +394,13 @@ def translate_grapevine_action(action: str) -> str | None:
     raise PlannerFailure(f"cannot translate Grapevine action {action!r}")
 
 
+def translate_tiger_action(action: str) -> str:
+    stem = action.split("__from_", 1)[0]
+    if stem.startswith("save_princess_"):
+        return "save-princess_" + stem[len("save_princess_") :]
+    return stem
+
+
 def deterministic_translation(domain_key: str, plan: list[str]) -> list[str] | None:
     if domain_key == "blocks-world":
         return list(plan)
@@ -379,6 +416,8 @@ def deterministic_translation(domain_key: str, plan: list[str]) -> list[str] | N
         return [item for action in plan if (item := translate_grapevine_action(action)) is not None]
     if domain_key == "active-muddy-child":
         return None
+    if domain_key == "tiger":
+        return [translate_tiger_action(action) for action in plan]
     raise PlannerFailure(f"no translation rule for domain {domain_key!r}")
 
 
@@ -495,51 +534,73 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory(prefix="jpm_epddl_bridge_") as tmp_str:
             tmp_dir = Path(tmp_str)
-            task = export_ground_task(
-                args.plank_binary,
+            plank_domain_path, plank_problem_path, plank_libraries = sanitize_epddl_inputs(
                 domain_path,
                 problem_path,
                 libraries,
-                tmp_dir / "grounded",
+                tmp_dir / "sanitized_inputs",
             )
-            domain_key, fpddl_domain, fpddl_problem = convert_ground_task(task, tmp_dir / "fpddl")
+            effective_spec_path = spec_path
+            if plank_domain_path != domain_path or plank_problem_path != problem_path:
+                effective_spec_path = None
+            domain_name = epddl_domain_name(plank_domain_path)
+            if domain_name == "tiger":
+                task = {"planning-task-info": {"domain": "tiger", "problem": plank_problem_path.stem}}
+                domain_key, fpddl_domain, fpddl_problem = convert_source_tiger(
+                    plank_domain_path,
+                    plank_problem_path,
+                    tmp_dir / "fpddl",
+                )
+            else:
+                task = export_ground_task(
+                    args.plank_binary,
+                    plank_domain_path,
+                    plank_problem_path,
+                    plank_libraries,
+                    tmp_dir / "grounded",
+                )
+                domain_key, fpddl_domain, fpddl_problem = convert_ground_task(task, tmp_dir / "fpddl")
             ir_path = tmp_dir / "task.json"
+            solver_search = args.search
+            if domain_key == "tiger" and solver_search == "cbfs":
+                print("Tiger uses greedy search for shorter compiled-state plans.", file=sys.stderr)
+                solver_search = "greedy"
             solver_payload = solve_with_cpp(
                 DEFAULT_EXPORTER,
                 args.solver,
                 fpddl_domain,
                 fpddl_problem,
                 ir_path,
-                search=args.search,
+                search=solver_search,
                 timeout=args.timeout,
                 max_expanded=args.max_expanded,
                 search_options_json=args.search_options_json,
             )
 
-        if not solver_payload.get("solvable"):
-            print(f"No JPM solution: {solver_payload.get('running', 'UNKNOWN')}")
-            write_plan_file(args.plan_file, None)
-            return 0
+            if not solver_payload.get("solvable"):
+                print(f"No JPM solution: {solver_payload.get('running', 'UNKNOWN')}")
+                write_plan_file(args.plan_file, None)
+                return 0
 
-        jp_plan = solver_payload.get("plan", [])
-        translated = translate_and_validate(
-            args.plank_binary,
-            domain_key,
-            task,
-            jp_plan,
-            domain_path=domain_path,
-            problem_path=problem_path,
-            libraries=libraries,
-            spec_path=spec_path,
-        )
-        if translated is None:
-            print("No validator-passing EPDDL translation found.")
-            write_plan_file(args.plan_file, None)
-            return 0
+            jp_plan = solver_payload.get("plan", [])
+            translated = translate_and_validate(
+                args.plank_binary,
+                domain_key,
+                task,
+                jp_plan,
+                domain_path=plank_domain_path,
+                problem_path=plank_problem_path,
+                libraries=plank_libraries,
+                spec_path=effective_spec_path,
+            )
+            if translated is None:
+                print("No validator-passing EPDDL translation found.")
+                write_plan_file(args.plan_file, None)
+                return 0
 
-        print("Validated EPDDL plan found.")
-        write_plan_file(args.plan_file, translated)
-        return 0
+            print("Validated EPDDL plan found.")
+            write_plan_file(args.plan_file, translated)
+            return 0
     except UnsupportedTask as exc:
         print(exc)
         write_plan_file(args.plan_file, None)
