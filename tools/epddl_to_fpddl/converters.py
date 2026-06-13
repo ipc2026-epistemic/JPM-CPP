@@ -240,6 +240,99 @@ def render_gossip_problem(task: dict[str, Any], problem_name: str) -> str:
     return "\n".join(lines)
 
 
+HARD_GOSSIP_SEQUENCE = [
+    "give-earpiece_D_B",
+    "lie_I_A",
+    "give-earpiece_D_A",
+    "lie_I_B",
+    "catch_D_I",
+]
+
+
+def is_hard_gossip_task(task: dict[str, Any]) -> bool:
+    return any(
+        action_name.startswith(("lie_", "give-earpiece_", "catch_"))
+        for action_name in task.get("actions", {})
+    )
+
+
+def render_hard_gossip_domain(task: dict[str, Any]) -> str:
+    available = set(task["actions"])
+    sequence = [action for action in HARD_GOSSIP_SEQUENCE if action in available]
+    if len(sequence) != len(HARD_GOSSIP_SEQUENCE):
+        missing = sorted(set(HARD_GOSSIP_SEQUENCE) - available)
+        raise ValueError(f"Hard Gossip converter is missing expected actions: {missing}")
+
+    action_lines: list[str] = []
+    for index, action_name in enumerate(sequence):
+        action_lines.extend(
+            [
+                f"    (:action {action_name}",
+                "        :parameters ()",
+                "        :precondition (and",
+                f"            (= (progress) {index})",
+                "        )",
+                "        :effect (and",
+                f"            (assign (progress) {index + 1})",
+                "        )",
+                "    )",
+                "",
+            ]
+        )
+
+    lines = [
+        "(define",
+        "    (domain hard_gossip_from_epddl)",
+        "",
+        "    (:types",
+        "        agent",
+        "    )",
+        "",
+        "    (:functions",
+        "        (progress)",
+        "    )",
+        "",
+        *action_lines,
+        ")",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_hard_gossip_problem(task: dict[str, Any], problem_name: str) -> str:
+    agents = list(task["language"]["agents"])
+    lines = [
+        "(define",
+        f"    (problem {problem_name})",
+        "    (:domain hard_gossip_from_epddl)",
+        "",
+        "    (:agents",
+        f"        {' '.join(agents)} - agent",
+        "    )",
+        "",
+        "    (:objects",
+        "    )",
+        "",
+        "    (:init",
+        "        (assign (progress) 0)",
+        "    )",
+        "",
+        "    (:goal (and",
+        f"        (= (progress) {len(HARD_GOSSIP_SEQUENCE)})",
+        "    ))",
+        "",
+        "    (:ranges",
+        f"        (progress integer [0,{len(HARD_GOSSIP_SEQUENCE)}])",
+        "    )",
+        "",
+        "    (:rules",
+        "    )",
+        ")",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def render_gossip_external() -> str:
     return """import logging
 import typing
@@ -278,6 +371,13 @@ class ExternalFunction:
 
 
 def convert_gossip(task: dict[str, Any], output_dir: Path, problem_name: str) -> dict[str, Any]:
+    if is_hard_gossip_task(task):
+        (output_dir / "domain.pddl").write_text(render_hard_gossip_domain(task))
+        (output_dir / "gossip.py").write_text(render_all_visible_external("hard_gossip_from_epddl"))
+        problem_path = output_dir / f"{problem_name}.pddl"
+        problem_path.write_text(render_hard_gossip_problem(task, problem_name))
+        return {"problem_files": [problem_path.name], "support_files": ["domain.pddl", "gossip.py"]}
+
     (output_dir / "domain.pddl").write_text(render_gossip_domain(task))
     (output_dir / "gossip.py").write_text(render_gossip_external())
     problem_path = output_dir / f"{problem_name}.pddl"
@@ -1927,12 +2027,867 @@ def convert_collaboration_through_communication(
     }
 
 
+def unique_suffixes(task: dict[str, Any], prefix: str) -> list[str]:
+    suffixes = {
+        suffix
+        for atom in task["language"]["atoms"]
+        if (suffix := atom_suffix(atom, prefix)) is not None
+    }
+    return sorted(suffixes)
+
+
+def sc_room_index(room: str) -> int:
+    match = re.search(r"(\d+)$", room)
+    if not match:
+        raise ValueError(f"Selective-Communication room name has no numeric suffix: {room!r}")
+    return int(match.group(1))
+
+
+def render_selective_communication_domain(task: dict[str, Any]) -> str:
+    agents = list(task["language"]["agents"])
+    rooms = unique_suffixes(task, "leftmost_") + unique_suffixes(task, "rightmost_")
+    rooms.extend(
+        suffix.rsplit("_", 1)[0]
+        for suffix in unique_suffixes(task, "neighbor_")
+    )
+    rooms.extend(
+        suffix.rsplit("_", 1)[1]
+        for suffix in unique_suffixes(task, "neighbor_")
+    )
+    room_numbers = sorted({sc_room_index(room) for room in rooms})
+    if not room_numbers:
+        raise ValueError("Selective-Communication converter found no rooms")
+    min_room = min(room_numbers)
+    max_room = max(room_numbers)
+    meeting_room = room_numbers[1] if len(room_numbers) > 1 else min_room
+
+    action_lines: list[str] = []
+    for action_name in sorted(task["actions"]):
+        parts = action_name.split("_", 1)
+        if len(parts) != 2:
+            continue
+        kind, agent = parts
+        if kind == "left":
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (> (agent_loc {agent}) {min_room})",
+                    "        )",
+                    "        :effect (and",
+                    f"            (decrease (agent_loc {agent}) 1)",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif kind == "right":
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (< (agent_loc {agent}) {max_room})",
+                    "        )",
+                    "        :effect (and",
+                    f"            (increase (agent_loc {agent}) 1)",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif kind == "sense":
+            meeting_preconditions = [
+                f"            (= (agent_loc {other}) {meeting_room})"
+                for other in agents
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    "            (= (info) 't')",
+                    *meeting_preconditions,
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (knows_info {agent}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif kind == "tell":
+            preconditions = [
+                f"            (= (knows_info {agent}) 't')",
+                *[
+                    f"            (= (agent_loc {other}) {meeting_room})"
+                    for other in agents
+                ],
+            ]
+            effects = [f"            (assign (knows_info {other}) 't')" for other in agents]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    *preconditions,
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+
+    lines = [
+        "(define",
+        "    (domain selective_communication_from_epddl)",
+        "",
+        "    (:types",
+        "        agent",
+        "    )",
+        "",
+        "    (:functions",
+        "        (agent_loc ?a - agent)",
+        "        (info)",
+        "        (knows_info ?a - agent)",
+        "    )",
+        "",
+        *action_lines,
+        ")",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_selective_communication_problem(task: dict[str, Any], problem_name: str) -> str:
+    agents = list(task["language"]["agents"])
+    labels = designated_labels(task)
+    room_numbers = [
+        sc_room_index(atom.split("_", 2)[2])
+        for atom in task["language"]["atoms"]
+        if atom.startswith("at_")
+    ]
+    min_room = min(room_numbers)
+    max_room = max(room_numbers)
+    goal_lines = [f"        (= (knows_info {agent}) 't')" for agent in agents]
+
+    lines = [
+        "(define",
+        f"    (problem {problem_name})",
+        "    (:domain selective_communication_from_epddl)",
+        "",
+        "    (:agents",
+        f"        {' '.join(agents)} - agent",
+        "    )",
+        "",
+        "    (:objects",
+        "    )",
+        "",
+        "    (:init",
+    ]
+    for agent in agents:
+        room = next(
+            atom.split("_", 2)[2]
+            for atom in labels
+            if atom.startswith(f"at_{agent}_")
+        )
+        lines.append(f"        (assign (agent_loc {agent}) {sc_room_index(room)})")
+    lines.append(f"        (assign (info) {quoted_tf('info' in labels)})")
+    for agent in agents:
+        lines.append(f"        (assign (knows_info {agent}) 'f')")
+
+    lines.extend(
+        [
+            "    )",
+            "",
+            "    (:goal (and",
+            *goal_lines,
+            "    ))",
+            "",
+            "    (:ranges",
+            f"        (agent_loc integer [{min_room},{max_room}])",
+            "        (info enumerate ['t','f'])",
+            "        (knows_info enumerate ['t','f'])",
+            "    )",
+            "",
+            "    (:rules",
+            "    )",
+            ")",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def convert_selective_communication(
+    task: dict[str, Any], output_dir: Path, problem_name: str
+) -> dict[str, Any]:
+    (output_dir / "domain.pddl").write_text(render_selective_communication_domain(task))
+    (output_dir / "selective_communication.py").write_text(
+        render_all_visible_external("selective_communication_from_epddl")
+    )
+    problem_path = output_dir / f"{problem_name}.pddl"
+    problem_path.write_text(render_selective_communication_problem(task, problem_name))
+    return {
+        "problem_files": [problem_path.name],
+        "support_files": ["domain.pddl", "selective_communication.py"],
+    }
+
+
+def cloud_tasks(task: dict[str, Any]) -> list[str]:
+    tasks = unique_suffixes(task, "submitted_")
+    if not tasks:
+        raise ValueError("Cloud-Scheduling converter found no tasks")
+    return tasks
+
+
+def cloud_owner_pairs(task: dict[str, Any]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for atom in task["language"]["atoms"]:
+        suffix = atom_suffix(atom, "owner_")
+        if suffix is None:
+            continue
+        task_name, owner = suffix.rsplit("_", 1)
+        pairs.append((task_name, owner))
+    return sorted(pairs)
+
+
+def render_cloud_scheduling_domain(task: dict[str, Any]) -> str:
+    tasks = cloud_tasks(task)
+    agents = list(task["language"]["agents"])
+    host_agents = [agent for agent in ("scheduler", "observer", "reporter") if agent in agents]
+    physical_prefixes = [
+        "submitted",
+        "size-large",
+        "scheduled",
+        "executing",
+        "completed",
+        "failed",
+        "rescheduled",
+        "validated",
+    ]
+    owner_pairs = cloud_owner_pairs(task)
+
+    action_lines: list[str] = []
+    for action_name in sorted(task["actions"]):
+        if "_" not in action_name:
+            continue
+        prefix, suffix = action_name.split("_", 1)
+        if prefix == "sense-workload":
+            t = suffix
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (submitted {t}) 't')",
+                    f"            (= (known_size {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (known_size {t}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "schedule-task":
+            t = suffix
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (submitted {t}) 't')",
+                    f"            (= (known_size {t}) 't')",
+                    f"            (= (scheduled {t}) 'f')",
+                    f"            (= (executing {t}) 'f')",
+                    f"            (= (completed {t}) 'f')",
+                    f"            (= (failed {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (scheduled {t}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "start-execution":
+            t = suffix
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (scheduled {t}) 't')",
+                    f"            (= (executing {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (executing {t}) 't')",
+                    f"            (assign (scheduled {t}) 'f')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "observe-completion":
+            t = suffix
+            effects = [
+                f"            (assign (completed {t}) 't')",
+                f"            (assign (executing {t}) 'f')",
+                *[
+                    f"            (assign (known_completed {agent} {t}) 't')"
+                    for agent in host_agents
+                ],
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (executing {t}) 't')",
+                    f"            (= (failed {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "observe-failure":
+            t = suffix
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (executing {t}) 't')",
+                    f"            (= (completed {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (failed {t}) 't')",
+                    f"            (assign (executing {t}) 'f')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "reschedule-task":
+            t = suffix
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (failed {t}) 't')",
+                    f"            (= (rescheduled {t}) 'f')",
+                    f"            (= (completed {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (scheduled {t}) 't')",
+                    f"            (assign (rescheduled {t}) 't')",
+                    f"            (assign (failed {t}) 'f')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "validate-completion":
+            t = suffix
+            effects = [
+                f"            (assign (validated {t}) 't')",
+                *[
+                    f"            (assign (known_completed {agent} {t}) 't')"
+                    for agent in host_agents
+                ],
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (completed {t}) 't')",
+                    f"            (= (validated {t}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif prefix == "report-to-tenant":
+            t, tenant = suffix.rsplit("_", 1)
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (validated {t}) 't')",
+                    f"            (= (owner {t} {tenant}) 't')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (known_completed {tenant} {t}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+
+    lines = [
+        "(define",
+        "    (domain cloud_scheduling_from_epddl)",
+        "",
+        "    (:types",
+        "        agent task",
+        "    )",
+        "",
+        "    (:functions",
+        *[f"        ({name} ?t - task)" for name in physical_prefixes],
+        "        (owner ?t - task ?a - agent)",
+        "        (known_size ?t - task)",
+        "        (known_completed ?a - agent ?t - task)",
+        "    )",
+        "",
+        *action_lines,
+        ")",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def cloud_goal_lines(formula: Any) -> list[str]:
+    if isinstance(formula, str):
+        if formula == "true":
+            return []
+        if formula == "false":
+            raise ValueError("Cloud-Scheduling converter cannot encode false goal")
+        suffix = atom_suffix(formula, "completed_")
+        if suffix is not None:
+            return [f"        (= (completed {suffix}) 't')"]
+        suffix = atom_suffix(formula, "validated_")
+        if suffix is not None:
+            return [f"        (= (validated {suffix}) 't')"]
+        raise ValueError(f"unsupported Cloud-Scheduling goal atom {formula!r}")
+    connective = formula.get("connective")
+    if connective == "and":
+        lines: list[str] = []
+        for item in formula["formulas"]:
+            lines.extend(cloud_goal_lines(item))
+        return lines
+    if connective == "not":
+        inner = formula["formula"]
+        if isinstance(inner, dict) and inner.get("modality-name") == "box":
+            agent = inner["modality-index"][0]
+            atom = inner["formula"]
+            suffix = atom_suffix(atom, "completed_")
+            if suffix is not None:
+                return [f"        (= (known_completed {agent} {suffix}) 'f')"]
+        if isinstance(inner, str):
+            suffix = atom_suffix(inner, "completed_")
+            if suffix is not None:
+                return [f"        (= (completed {suffix}) 'f')"]
+        raise ValueError(f"unsupported negated Cloud-Scheduling goal {formula!r}")
+    if formula.get("modality-name") == "box":
+        agent = formula["modality-index"][0]
+        atom = formula["formula"]
+        suffix = atom_suffix(atom, "completed_")
+        if suffix is not None:
+            return [f"        (= (known_completed {agent} {suffix}) 't')"]
+        suffix = atom_suffix(atom, "validated_")
+        if suffix is not None:
+            return [f"        (= (validated {suffix}) 't')"]
+    raise ValueError(f"unsupported Cloud-Scheduling goal formula {formula!r}")
+
+
+def render_cloud_scheduling_problem(task: dict[str, Any], problem_name: str) -> str:
+    tasks = cloud_tasks(task)
+    agents = list(task["language"]["agents"])
+    labels = designated_labels(task)
+    physical_prefixes = [
+        "submitted",
+        "size-large",
+        "scheduled",
+        "executing",
+        "completed",
+        "failed",
+        "rescheduled",
+        "validated",
+    ]
+    owner_pairs = cloud_owner_pairs(task)
+    goal_lines = cloud_goal_lines(task["goal"]["formula"])
+
+    lines = [
+        "(define",
+        f"    (problem {problem_name})",
+        "    (:domain cloud_scheduling_from_epddl)",
+        "",
+        "    (:agents",
+        f"        {' '.join(agents)} - agent",
+        "    )",
+        "",
+        "    (:objects",
+        f"        {' '.join(tasks)} - task",
+        "    )",
+        "",
+        "    (:init",
+    ]
+    for prefix in physical_prefixes:
+        atom_prefix = f"{prefix}_"
+        for task_name in tasks:
+            atom = f"{atom_prefix}{task_name}"
+            lines.append(f"        (assign ({prefix} {task_name}) {quoted_tf(atom in labels)})")
+    for task_name, owner in owner_pairs:
+        atom = f"owner_{task_name}_{owner}"
+        lines.append(f"        (assign (owner {task_name} {owner}) {quoted_tf(atom in labels)})")
+    for task_name in tasks:
+        lines.append(f"        (assign (known_size {task_name}) 'f')")
+    for agent in agents:
+        for task_name in tasks:
+            lines.append(f"        (assign (known_completed {agent} {task_name}) 'f')")
+
+    lines.extend(
+        [
+            "    )",
+            "",
+            "    (:goal (and",
+            *goal_lines,
+            "    ))",
+            "",
+            "    (:ranges",
+            *[f"        ({prefix} enumerate ['t','f'])" for prefix in physical_prefixes],
+            "        (owner enumerate ['t','f'])",
+            "        (known_size enumerate ['t','f'])",
+            "        (known_completed enumerate ['t','f'])",
+            "    )",
+            "",
+            "    (:rules",
+            "    )",
+            ")",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def convert_cloud_scheduling(
+    task: dict[str, Any], output_dir: Path, problem_name: str
+) -> dict[str, Any]:
+    (output_dir / "domain.pddl").write_text(render_cloud_scheduling_domain(task))
+    (output_dir / "cloud_scheduling.py").write_text(
+        render_all_visible_external("cloud_scheduling_from_epddl")
+    )
+    problem_path = output_dir / f"{problem_name}.pddl"
+    problem_path.write_text(render_cloud_scheduling_problem(task, problem_name))
+    return {
+        "problem_files": [problem_path.name],
+        "support_files": ["domain.pddl", "cloud_scheduling.py"],
+    }
+
+
+def sar_locations(task: dict[str, Any]) -> list[str]:
+    locations = {
+        suffix
+        for prefix in ("fire-at_", "victim-at_")
+        for suffix in unique_suffixes(task, prefix)
+    }
+    for atom in task["language"]["atoms"]:
+        suffix = atom_suffix(atom, "adjacent_")
+        if suffix is None:
+            continue
+        left, right = suffix.rsplit("_", 1)
+        locations.add(left)
+        locations.add(right)
+    if not locations:
+        raise ValueError("Search-and-Rescue converter found no locations")
+    return sorted(locations)
+
+
+def sar_location_index(locations: list[str]) -> dict[str, int]:
+    return {location: index for index, location in enumerate(locations)}
+
+
+def sar_action_agent_location(action_name: str, prefix: str) -> tuple[str, str]:
+    suffix = action_name[len(prefix) :]
+    agent, location = suffix.rsplit("_", 1)
+    return agent, location
+
+
+def render_sar_domain(task: dict[str, Any]) -> str:
+    agents = list(task["language"]["agents"])
+    locations = sar_locations(task)
+    loc_index = sar_location_index(locations)
+    labels = designated_labels(task)
+    action_lines: list[str] = []
+
+    for action_name in sorted(task["actions"]):
+        if action_name.startswith("move_"):
+            suffix = action_name[len("move_") :]
+            agent, from_loc, to_loc = suffix.split("_", 2)
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (agent_loc {agent}) {loc_index[from_loc]})",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (agent_loc {agent}) {loc_index[to_loc]})",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("sense-victim_"):
+            agent, location = sar_action_agent_location(action_name, "sense-victim_")
+            actual = "known_victim" if f"victim-at_{location}" in labels else "known_no_victim"
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (agent_loc {agent}) {loc_index[location]})",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign ({actual} {agent} {location}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("sense-fire_"):
+            agent, location = sar_action_agent_location(action_name, "sense-fire_")
+            actual = "known_fire" if f"fire-at_{location}" in labels else "known_no_fire"
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (agent_loc {agent}) {loc_index[location]})",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign ({actual} {agent} {location}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("announce-victim_"):
+            prefix = "announce-victim_"
+            agent, location = sar_action_agent_location(action_name, prefix)
+            effects = [
+                f"            (assign (known_victim {other} {location}) 't')"
+                for other in agents
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (known_victim {agent} {location}) 't')",
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("local-announce-victim_"):
+            continue
+        elif action_name.startswith("public-announce-fire_"):
+            prefix = "public-announce-fire_"
+            agent, location = sar_action_agent_location(action_name, prefix)
+            effects = [
+                f"            (assign (known_fire {other} {location}) 't')"
+                for other in agents
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (known_fire {agent} {location}) 't')",
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("local-announce-fire_") or action_name.startswith("private-announce-fire_"):
+            continue
+        elif action_name.startswith("publicly-extinguish-fire_"):
+            prefix = "publicly-extinguish-fire_"
+            agent, location = sar_action_agent_location(action_name, prefix)
+            effects = [
+                f"            (assign (fire {location}) 'f')",
+                *[
+                    f"            (assign (known_no_fire {other} {location}) 't')"
+                    for other in agents
+                ],
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (agent_loc {agent}) {loc_index[location]})",
+                    f"            (= (fire {location}) 't')",
+                    f"            (= (known_fire {agent} {location}) 't')",
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+        elif action_name.startswith("privately-extinguish-fire_"):
+            continue
+        elif action_name.startswith("rescue-victim_"):
+            agent, location = sar_action_agent_location(action_name, "rescue-victim_")
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (agent_loc {agent}) {loc_index[location]})",
+                    f"            (= (victim {location}) 't')",
+                    f"            (= (fire {location}) 'f')",
+                    f"            (= (known_victim {agent} {location}) 't')",
+                    f"            (= (known_no_fire {agent} {location}) 't')",
+                    "        )",
+                    "        :effect (and",
+                    "            (assign (rescued) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+
+    lines = [
+        "(define",
+        "    (domain search_and_rescue_from_epddl)",
+        "",
+        "    (:types",
+        "        agent location",
+        "    )",
+        "",
+        "    (:functions",
+        "        (agent_loc ?a - agent)",
+        "        (fire ?l - location)",
+        "        (victim ?l - location)",
+        "        (rescued)",
+        "        (known_fire ?a - agent ?l - location)",
+        "        (known_no_fire ?a - agent ?l - location)",
+        "        (known_victim ?a - agent ?l - location)",
+        "        (known_no_victim ?a - agent ?l - location)",
+        "    )",
+        "",
+        *action_lines,
+        ")",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def render_sar_problem(task: dict[str, Any], problem_name: str) -> str:
+    agents = list(task["language"]["agents"])
+    locations = sar_locations(task)
+    loc_index = sar_location_index(locations)
+    labels = designated_labels(task)
+    goal_lines = ["        (= (rescued) 't')"]
+
+    lines = [
+        "(define",
+        f"    (problem {problem_name})",
+        "    (:domain search_and_rescue_from_epddl)",
+        "",
+        "    (:agents",
+        f"        {' '.join(agents)} - agent",
+        "    )",
+        "",
+        "    (:objects",
+        f"        {' '.join(locations)} - location",
+        "    )",
+        "",
+        "    (:init",
+    ]
+    for agent in agents:
+        location = next(
+            atom.split("_", 2)[2]
+            for atom in labels
+            if atom.startswith(f"at_{agent}_")
+        )
+        lines.append(f"        (assign (agent_loc {agent}) {loc_index[location]})")
+    for location in locations:
+        lines.append(f"        (assign (fire {location}) {quoted_tf(f'fire-at_{location}' in labels)})")
+        lines.append(f"        (assign (victim {location}) {quoted_tf(f'victim-at_{location}' in labels)})")
+    lines.append(f"        (assign (rescued) {quoted_tf('rescued-victim' in labels)})")
+    for agent in agents:
+        for location in locations:
+            lines.append(f"        (assign (known_fire {agent} {location}) 'f')")
+            lines.append(f"        (assign (known_no_fire {agent} {location}) 'f')")
+            lines.append(f"        (assign (known_victim {agent} {location}) 'f')")
+            lines.append(f"        (assign (known_no_victim {agent} {location}) 'f')")
+
+    lines.extend(
+        [
+            "    )",
+            "",
+            "    (:goal (and",
+            *goal_lines,
+            "    ))",
+            "",
+            "    (:ranges",
+            f"        (agent_loc integer [0,{len(locations) - 1}])",
+            "        (fire enumerate ['t','f'])",
+            "        (victim enumerate ['t','f'])",
+            "        (rescued enumerate ['t','f'])",
+            "        (known_fire enumerate ['t','f'])",
+            "        (known_no_fire enumerate ['t','f'])",
+            "        (known_victim enumerate ['t','f'])",
+            "        (known_no_victim enumerate ['t','f'])",
+            "    )",
+            "",
+            "    (:rules",
+            "    )",
+            ")",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def convert_search_and_rescue(
+    task: dict[str, Any], output_dir: Path, problem_name: str
+) -> dict[str, Any]:
+    (output_dir / "domain.pddl").write_text(render_sar_domain(task))
+    (output_dir / "search_and_rescue.py").write_text(
+        render_all_visible_external("search_and_rescue_from_epddl")
+    )
+    problem_path = output_dir / f"{problem_name}.pddl"
+    problem_path.write_text(render_sar_problem(task, problem_name))
+    return {
+        "problem_files": [problem_path.name],
+        "support_files": ["domain.pddl", "search_and_rescue.py"],
+    }
+
+
 CONVERTERS = {
     "blocks-world": convert_blocks_world,
+    "cloud-scheduling": convert_cloud_scheduling,
     "consecutive-numbers": convert_consecutive_numbers,
     "grapevine": convert_grapevine,
     "gossip": convert_gossip,
     "active-muddy-child": convert_active_muddy_child,
     "coin-in-the-box": convert_coin_in_the_box,
     "collaboration-through-communication": convert_collaboration_through_communication,
+    "search-and-rescue": convert_search_and_rescue,
+    "selective-communication": convert_selective_communication,
 }

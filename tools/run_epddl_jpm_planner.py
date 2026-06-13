@@ -39,22 +39,28 @@ DEFAULT_PLANK_BINARY = Path(
 SUPPORTED_DOMAINS = {
     "active-muddy-child": "active-muddy-child",
     "blocks-world": "blocks-world",
+    "cloud-scheduling": "cloud-scheduling",
     "coin-in-the-box": "coin-in-the-box",
     "collaboration-through-communication": "collaboration-through-communication",
     "consecutive-numbers": "consecutive-numbers",
     "gossip": "gossip",
     "grapevine": "grapevine",
+    "search-and-rescue": "search-and-rescue",
+    "selective-communication": "selective-communication",
     "tiger": "tiger",
 }
 
 TEMPLATE_DIRS = {
     "active-muddy-child": "active_muddy_child",
     "blocks-world": "blocks_world",
+    "cloud-scheduling": "cloud_scheduling",
     "coin-in-the-box": "coin_in_the_box",
     "collaboration-through-communication": "collaboration_through_communication",
     "consecutive-numbers": "consecutive_numbers",
     "gossip": "gossip",
     "grapevine": "grapevine",
+    "search-and-rescue": "search_and_rescue",
+    "selective-communication": "selective_communication",
     "tiger": "tiger",
 }
 
@@ -424,9 +430,20 @@ def translate_amc_action(action: str, task: dict[str, Any]) -> str:
     return translated
 
 
-def deterministic_translation(domain_key: str, plan: list[str]) -> list[str] | None:
-    if domain_key == "blocks-world":
-        return list(plan)
+def restore_ground_action_case(action: str, task: dict[str, Any]) -> str:
+    action_names = task.get("actions", {}).keys()
+    by_lower = {name.lower(): name for name in action_names}
+    return by_lower.get(action.lower(), action)
+
+
+def deterministic_translation(domain_key: str, plan: list[str], task: dict[str, Any]) -> list[str] | None:
+    if domain_key in {
+        "blocks-world",
+        "cloud-scheduling",
+        "search-and-rescue",
+        "selective-communication",
+    }:
+        return [restore_ground_action_case(action, task) for action in plan]
     if domain_key == "coin-in-the-box":
         return [translate_coin_action(action) for action in plan]
     if domain_key == "collaboration-through-communication":
@@ -434,7 +451,7 @@ def deterministic_translation(domain_key: str, plan: list[str]) -> list[str] | N
     if domain_key == "consecutive-numbers":
         return [translate_consecutive_numbers_action(action) for action in plan]
     if domain_key == "gossip":
-        return [translate_gossip_action(action) for action in plan]
+        return [restore_ground_action_case(action, task) for action in plan]
     if domain_key == "grapevine":
         return [item for action in plan if (item := translate_grapevine_action(action)) is not None]
     if domain_key == "active-muddy-child":
@@ -583,7 +600,7 @@ def translate_and_validate(
     libraries: list[Path],
     spec_path: Path | None,
 ) -> list[str] | None:
-    candidate = deterministic_translation(domain_key, jp_plan)
+    candidate = deterministic_translation(domain_key, jp_plan, task)
     if candidate is not None:
         valid, message = validate_epddl_plan(
             plank_binary,

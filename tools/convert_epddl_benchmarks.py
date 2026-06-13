@@ -121,12 +121,15 @@ DOMAIN_SPECS = {
     "Selective-Communication": DomainSpec(
         source_dir="Selective-Communication",
         library_file="intermediate.epddl",
-        support_level="unsupported",
+        support_level="supported",
         notes=(
-            "The bundled EPDDL domain still hits parser compatibility issues under the "
-            "newer plank build and has no F-PDDL mapping yet."
+            "Converted to a generated Selective-Communication F-PDDL family with explicit "
+            "agent locations and information-knowledge flags. The generated benchmark model "
+            "uses the common-room sense/tell pattern exercised by the smoke test and "
+            "round-trips plans back to the original EPDDL action names."
         ),
         target_dir="selective_communication",
+        converter_name="selective-communication",
     ),
 }
 

@@ -190,6 +190,51 @@ def remove_agent_constant(domain_text: str, agent_name: str) -> str:
     return pattern.sub("\n", domain_text, count=1)
 
 
+def normalize_gossip_domain(domain_text: str) -> str:
+    text = re.sub(
+        r"\n\s*normal-agent\s+detective\s+impostor\s*-\s*agent\s*",
+        "\n",
+        domain_text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\(either\s+normal-agent\s+impostor\)", "agent", text, flags=re.IGNORECASE)
+    for role in ("normal-agent", "detective", "impostor"):
+        text = re.sub(rf"\b{role}\b", "agent", text, flags=re.IGNORECASE)
+    return text
+
+
+def normalize_typed_agents_to_untyped(problem_text: str) -> str:
+    match = re.search(r"\(:agents(?P<body>.*?)\)", problem_text, flags=re.IGNORECASE | re.DOTALL)
+    if match is None:
+        return problem_text
+
+    tokens = match.group("body").split()
+    agents: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-":
+            index += 2
+            continue
+        if index + 1 < len(tokens) and tokens[index + 1] == "-":
+            agents.append(token)
+            index += 1
+            continue
+        agents.append(token)
+        index += 1
+
+    agents_clause = f"(:agents {' '.join(dict.fromkeys(agents))})"
+    return problem_text[: match.start()] + agents_clause + problem_text[match.end() :]
+
+
+def normalize_gossip_problem(problem_text: str) -> str:
+    text = normalize_typed_agents_to_untyped(problem_text)
+    text = re.sub(r"\(either\s+normal-agent\s+impostor\)", "agent", text, flags=re.IGNORECASE)
+    for role in ("normal-agent", "detective", "impostor"):
+        text = re.sub(rf"\b{role}\b", "agent", text, flags=re.IGNORECASE)
+    return text
+
+
 def sanitize_epddl_inputs(
     domain_path: Path,
     problem_path: Path,
@@ -208,6 +253,9 @@ def sanitize_epddl_inputs(
     if domain_name == "blocks-world":
         sanitized_domain = remove_agent_constant(sanitized_domain, "Robot")
         sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Robot)\n")
+    elif domain_name == "gossip":
+        sanitized_domain = normalize_gossip_domain(sanitized_domain)
+        sanitized_problem = normalize_gossip_problem(sanitized_problem)
     elif domain_name == "tiger":
         sanitized_domain = normalize_tiger_domain(sanitized_domain)
         sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Knight)\n")
