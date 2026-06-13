@@ -77,6 +77,7 @@ struct Task {
     std::vector<Condition> goals;
     std::vector<Action> actions;
     bool has_epistemic_formulas = false;
+    std::string observation_model = "all_visible";
     std::string visibility_model = "all_visible";
 };
 

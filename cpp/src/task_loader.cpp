@@ -1,6 +1,7 @@
 #include "jpm/task.hpp"
 
 #include "jpm/json.hpp"
+#include "jpm/observation.hpp"
 #include "jpm/visibility.hpp"
 
 #include <fstream>
@@ -155,15 +156,24 @@ Task load_task(const std::string &path) {
             }
         }
     }
-    bool has_visibility_metadata = false;
+    bool has_observation_metadata = false;
     if (auto metadata_value = json::maybe_at(root, "metadata")) {
         const auto &metadata = (*metadata_value)->as_object();
+        if (auto observation_model = json::maybe_at(metadata, "observation_model")) {
+            task.observation_model = (*observation_model)->as_string();
+            task.visibility_model = task.observation_model;
+            has_observation_metadata = true;
+        }
         if (auto visibility_model = json::maybe_at(metadata, "visibility_model")) {
+            if (!has_observation_metadata) {
+                task.observation_model = (*visibility_model)->as_string();
+            }
             task.visibility_model = (*visibility_model)->as_string();
-            has_visibility_metadata = true;
+            has_observation_metadata = true;
         }
     }
-    if (!has_visibility_metadata) {
+    if (!has_observation_metadata) {
+        task.observation_model = detect_observation_model_name(task);
         task.visibility_model = detect_visibility_model_name(task);
     }
 

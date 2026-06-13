@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .common import JPM_ROOT, atom_suffix, designated_labels, fpddl_name, quoted_tf
+from .common import CONVERTED_ROOT, JPM_ROOT, atom_suffix, designated_labels, fpddl_name, quoted_tf
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -22,6 +22,12 @@ def lower_agents(task: dict[str, Any]) -> list[str]:
 
 def copy_support_files(output_dir: Path, benchmark_dir: str, filenames: list[str]) -> None:
     src_dir = JPM_ROOT / "benchmarks" / benchmark_dir
+    for filename in filenames:
+        shutil.copy2(src_dir / filename, output_dir / filename)
+
+
+def copy_converted_support_files(output_dir: Path, template_dir: str, filenames: list[str]) -> None:
+    src_dir = CONVERTED_ROOT / template_dir
     for filename in filenames:
         shutil.copy2(src_dir / filename, output_dir / filename)
 
@@ -1080,19 +1086,18 @@ def render_amc_problem(task: dict[str, Any], problem_name: str) -> str:
         "",
         "    (:agents",
         f"        {' '.join(children)} - children",
-        "        t - teacher",
         "    )",
         "",
         "    (:objects",
         "    )",
         "",
         "    (:init",
-        "        (assign (num_of_question t) 0)",
     ]
     for agent in agents:
         truth = f"muddy_{agent}" in labels
         lines.append(f"        (assign (muddy {fpddl_name(agent)}) {quoted_tf(truth)})")
-    lines.append("        (assign (shouted) 'f')")
+    for child in children:
+        lines.append(f"        (assign (asked {child}) 'not_asked')")
     lines.extend(
         [
             "    )",
@@ -1102,9 +1107,8 @@ def render_amc_problem(task: dict[str, Any], problem_name: str) -> str:
             "    ))",
             "",
             "    (:ranges",
-            f"        (num_of_question integer [0,{max(1, len(children))}])",
             "        (muddy enumerate ['t','f'])",
-            "        (shouted enumerate ['t','f'])",
+            "        (asked enumerate ['not_asked','yes','no'])",
             "    )",
             "",
             "    (:rules",
@@ -1117,10 +1121,11 @@ def render_amc_problem(task: dict[str, Any], problem_name: str) -> str:
 
 
 def convert_active_muddy_child(task: dict[str, Any], output_dir: Path, problem_name: str) -> dict[str, Any]:
-    copy_support_files(output_dir, "muddy_children", ["domain.pddl", "muddy_children.py"])
+    support_files = ["domain.pddl", "muddy_children.py", "visibility.json"]
+    copy_converted_support_files(output_dir, "active_muddy_child", support_files)
     problem_path = output_dir / f"{problem_name}.pddl"
     problem_path.write_text(render_amc_problem(task, problem_name))
-    return {"problem_files": [problem_path.name], "support_files": ["domain.pddl", "muddy_children.py"]}
+    return {"problem_files": [problem_path.name], "support_files": support_files}
 
 
 def render_coin_domain(task: dict[str, Any]) -> str:

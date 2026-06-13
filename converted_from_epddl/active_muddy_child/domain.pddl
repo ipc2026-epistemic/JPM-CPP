@@ -1,38 +1,34 @@
 (define
     (domain muddy_children)
 
-    (:types ;todo: enumerate types and their hierarchy here, e.g. car truck bus - vehicle
-        teacher children
+    (:types
+        children
     )
 
-
-
-    (:functions 
-        (num_of_question ?t - teacher)
+    (:functions
         (muddy ?c - children)
-        (shouted)
+        (asked ?c - children)
     )
 
-    (:action say_yes
+    (:action ask_yes
         :parameters (?i - children)
-        :precondition (and 
-            (= (shouted) 'f')
+        :precondition (and
+            (= (asked ?i) 'not_asked')
             (= (@ep ("+ b [?i]") (= (muddy ?i) 't')) ep.true)
         )
-        :effect (and 
-            (assign (shouted) 't')
+        :effect (and
+            (assign (asked ?i) 'yes')
         )
     )
 
-
-    ;define actions here
-    (:action ask
-        :parameters (?i - teacher)
-        :precondition (
+    (:action ask_no
+        :parameters (?i - children)
+        :precondition (and
+            (= (asked ?i) 'not_asked')
+            (!= (@ep ("+ b [?i]") (= (muddy ?i) 't')) ep.true)
         )
-        :effect (
-            ; increase sth by 1
-            (increase (num_of_question ?i) 1)
+        :effect (and
+            (assign (asked ?i) 'no')
         )
     )
 )

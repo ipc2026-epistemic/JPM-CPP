@@ -1,4 +1,4 @@
-#include "jpm/visibility.hpp"
+#include "jpm/observation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -90,6 +90,13 @@ bool visible(
     return delta <= DEFAULT_VIEW_ANGLE / 2.0;
 }
 
-const VisibilityModelRegistration registration("bbl", visible);
+std::vector<int> observe(
+    const Task &task,
+    const std::vector<int> &state,
+    const std::string &agent) {
+    return project_visible_state(task, state, agent, visible);
+}
+
+const ObservationModelRegistration registration("bbl", observe);
 
 }  // namespace

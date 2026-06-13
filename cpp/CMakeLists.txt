@@ -59,6 +59,7 @@ endif()
 add_executable(jpm_cpp_solver
     src/jpm_cpp_solver.cpp
     src/evaluator.cpp
+    src/observation.cpp
     src/search.cpp
     src/search_algorithm.cpp
     src/search_support.cpp

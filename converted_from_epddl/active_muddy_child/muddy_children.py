@@ -1,101 +1,89 @@
-import logging 
+import logging
 import typing
-from util import Function,FunctionSchema,Entity,EntityType,setup_logger,Type
-from datetime import datetime
 
-LOGGER_NAME = "bbl"
+from util import Entity, EntityType, Function, FunctionSchema, Type, setup_logger, special_value
+
+
+LOGGER_NAME = "converted_muddy_children"
 LOGGER_LEVEL = logging.INFO
-# LOGGER_LEVEL = logging.DEBUG
 
-#####
-import numpy as np
-import math
-common_constants = {
-    # 'angle a': 89,
-    # 'angle b': 89,
-}
-
-dir_dict = {
-    # 'n': 90,
-    # 'ne': 45,
-    # 'e':0,
-    # 'se':-45,
-    # 's':-90,
-    # 'sw':-135,
-    # 'w':180,
-    # 'nw':135,
-}
-
-#####
 
 class ExternalFunction:
     logger = None
-    
+
     def __init__(self, handlers):
-        self.logger = setup_logger(LOGGER_NAME,handlers,logger_level=LOGGER_LEVEL) 
-    
-    def checkVisibility(self,state,agent_index,var_name,entities:typing.Dict[str,Entity],
-                        functions:typing.Dict[str,Function],
-                        function_schemas:typing.Dict[str,FunctionSchema],
-                        types:typing.Dict[str,Type]):
-        if not agent_index in entities.keys():
+        self.logger = setup_logger(LOGGER_NAME, handlers, logger_level=LOGGER_LEVEL)
+
+    def _validate_agent_and_var(
+        self,
+        agent_index,
+        var_name,
+        entities: typing.Dict[str, Entity],
+        functions: typing.Dict[str, Function],
+    ) -> Function:
+        if agent_index not in entities:
             raise ValueError(f"agent_index [{agent_index}] not found in entities")
-        if not entities[agent_index].entity_type == EntityType.AGENT:
+        if entities[agent_index].entity_type != EntityType.AGENT:
             raise ValueError(f"agent_index [{agent_index}] is not an agent")
-        if var_name not in functions.keys():
+        if var_name not in functions:
             raise ValueError(f"var_name [{var_name}] not found in functions")
-        
-        function = functions[var_name]
-        function_schemas_name = function.function_schema_name
-        target_list = function.entity_index_list
-        
-        # for the bbl domain, all visibility function should be the same
-        # based on whether the agents physically see the objects/agents or not
-        # and all functions in bbl domain have only one entity
-        if len(target_list) > 1:
-            raise ValueError("all function in muddy children should have only one or zero entity",var_name)
+        return functions[var_name]
 
-        target_index = None
-        if not target_list==[]:
-            target_index = target_list[0]
+    def _asked_status(self, state, child):
+        return state.get(f"asked {child}")
 
-            if not target_index in entities.keys():
-                raise ValueError(f"target_index [{target_index}] not found in entities")
+    def _self_evidence_is_sufficient(self, state, agent_index):
+        all_visible_muddy_answered_no = True
+        all_visible_muddy_asked = True
+        any_visible_muddy_answered_yes = False
 
-        if function_schemas_name == "muddy":
-            # in muddy children, the agent can see other's forehead not their own
-            if not agent_index == target_index:
-                return True
+        for var_name, value in state.items():
+            if not var_name.startswith("muddy ") or value != "t":
+                continue
+            child = var_name.split(" ", 1)[1]
+            if child == agent_index:
+                continue
+
+            status = self._asked_status(state, child)
+            if status == "yes":
+                all_visible_muddy_answered_no = False
+                any_visible_muddy_answered_yes = True
+            elif status == "no":
+                pass
             else:
-                visible_muddy_children_list = []
-                num_of_question = -1
-                for key,value in state.items():
-                    if key.startswith("muddy ") and not key==f"muddy {agent_index}" and value == 't':
-                        visible_muddy_children_list.append(key)
-                    elif key.startswith("num_of_question"):
-                        num_of_question = int(value)
-                # if the question has been asked one more times as the muddy children the agent sees
-                # then the agent can see its own forehead and it should be muddy
-                if num_of_question == -1:
-                    raise ValueError("num_of_question not found")
-                # print(agent_index)
-                # print(num_of_question)
-                # print(visible_muddy_children_list)
-                if len(visible_muddy_children_list) == num_of_question-1:
+                all_visible_muddy_answered_no = False
+                all_visible_muddy_asked = False
 
-                    # if state[f"muddy_{agent_index}"] == 'f':
-                    #     raise ValueError(f"agent {agent_index} can see its own forehead but it is clean")
-                    return True
-                
-                # one of the children already know,
-                # so, the other will also know
-                if state["shouted"] == 't':
-                    return True
+        return all_visible_muddy_answered_no or (
+            all_visible_muddy_asked and any_visible_muddy_answered_yes
+        )
 
-                return False
-                
-
-        elif function_schemas_name == "shouted":
+    def checkVisibility(
+        self,
+        state,
+        agent_index,
+        var_name,
+        entities: typing.Dict[str, Entity],
+        functions: typing.Dict[str, Function],
+        function_schemas: typing.Dict[str, FunctionSchema],
+        types: typing.Dict[str, Type],
+    ):
+        function = self._validate_agent_and_var(agent_index, var_name, entities, functions)
+        if function.function_schema_name == "asked":
             return True
-        elif function_schemas_name == "num_of_question":
-            return True
+        if function.function_schema_name != "muddy":
+            raise ValueError(f"function_schema_name [{function.function_schema_name}] not found")
+        if len(function.entity_index_list) != 1:
+            raise ValueError("muddy function should have exactly one entity", var_name)
+        target_index = function.entity_index_list[0]
+        return target_index != agent_index or self._self_evidence_is_sufficient(state, agent_index)
+
+    def get1o(self, parent_state, agt_id):
+        new_state = dict(parent_state)
+        for var_name in parent_state:
+            if not var_name.startswith("muddy "):
+                continue
+            target = var_name.split(" ", 1)[1]
+            if target == agt_id and not self._self_evidence_is_sufficient(parent_state, agt_id):
+                new_state[var_name] = special_value.HAVENT_SEEN
+        return new_state

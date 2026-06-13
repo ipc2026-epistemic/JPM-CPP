@@ -21,23 +21,24 @@ The solver is split into a small set of modules:
 | `include/jpm/task.hpp`, `src/task.cpp` | Core task model, enums, and value encoding. |
 | `src/task_loader.cpp` | JSON IR to in-memory `Task` conversion. |
 | `include/jpm/evaluator.hpp`, `src/evaluator.cpp` | Ontic, `@ep`, `@jp`, observation, and perspective evaluation. |
-| `include/jpm/visibility.hpp`, `src/visibility.cpp` | Visibility-model selection, shared visibility helpers, and dispatch. |
-| `../benchmarks/*/visibility.cpp`, `../converted_from_epddl/*/visibility.cpp` | Domain-specific visibility implementations, stored next to their `domain.pddl`. |
+| `include/jpm/observation.hpp`, `src/observation.cpp` | Observation-model selection and state-to-state observation dispatch. |
+| `include/jpm/visibility.hpp`, `src/visibility.cpp` | Legacy visibility-model helpers and fallback dispatch. |
+| `../benchmarks/*/visibility.cpp`, `../converted_from_epddl/*/visibility.cpp` | Domain-specific observation implementations, stored next to their `domain.pddl`. |
 | `include/jpm/transition.hpp`, `src/transition.cpp` | Action applicability, effect application, and successor-state generation. |
 | `include/jpm/search.hpp`, `src/search.cpp` | Shared search engine, perspective-aware duplicate checking, unknown-goal pruning, heuristic scoring, plan extraction, and JSON result printing. |
 | `include/jpm/search_algorithm.hpp`, `src/search_algorithm.cpp` | Search algorithm registry and lookup. |
 | `src/search_algorithms/*.cpp` | Individual search algorithm implementations. |
 | `src/jpm_cpp_solver.cpp` | CLI argument parsing and solver entry point. |
 
-## Domain Visibility
+## Domain Observation
 
-Visibility is selected by a `visibility.json` file next to each `domain.pddl`. The Python IR exporter copies this declaration into `metadata.visibility_model`, and the C++ runtime dispatches to the domain-local evaluator registered from that folder's `visibility.cpp`. If a domain does not provide this metadata, the C++ solver falls back to `all_visible`.
+Observation is selected by an `observation.json` or legacy `visibility.json` file next to each `domain.pddl`. The Python IR exporter copies this declaration into `metadata.observation_model`, and the C++ runtime dispatches to the domain-local evaluator registered from that folder's C++ file. If a domain does not provide this metadata, the C++ solver falls back to `all_visible`.
 
 Example:
 
 ```json
 {
-  "visibility_model": "grapevine"
+  "observation_model": "grapevine"
 }
 ```
 
@@ -45,7 +46,7 @@ Supported models:
 
 | Model | C++ implementation |
 |---|---|
-| `all_visible` | Built into `src/visibility.cpp`. |
+| `all_visible` | Built into `src/observation.cpp`. |
 | `bbl` | `../benchmarks/bbl/visibility.cpp` |
 | `native_coin` | `../benchmarks/coin/visibility.cpp` |
 | `corridor` | `../benchmarks/corridor/visibility.cpp` |
@@ -61,12 +62,12 @@ Supported models:
 | `converted_muddy_children` | `../converted_from_epddl/active_muddy_child/visibility.cpp` |
 | `collaboration_through_communication` | `../converted_from_epddl/collaboration_through_communication/visibility.cpp` |
 
-Each custom file registers itself with `VisibilityModelRegistration`, so the core solver does not need domain-specific visibility branches.
+Each custom file registers itself with `ObservationModelRegistration` and returns the partial state observed by an agent. Existing benchmark files use `project_visible_state(...)` to preserve the old per-variable visibility behavior until a domain needs richer derived observations.
 
 ## Build
 
 ```bash
-cd /home/guangh_ubuntu/projects/competition/iepc/justified_perspective_model
+cd /home/guangh_ubuntu/projects/competition/iepc/team-1
 
 cmake -S cpp -B cpp/build
 cmake --build cpp/build
@@ -239,11 +240,11 @@ Implemented:
 - basic `@jp` reads in preconditions and assignment effects
 - `@ep` assignment effects to `true`/`false`/`unknown`, `t`/`f`, or `1`/`0` style target domains
 - cached observation and perspective sequences during node evaluation
-- visibility dispatch through domain-folder `visibility.json` metadata
-- domain-local visibility models for the native and converted benchmark folders
+- observation dispatch through domain-folder `observation.json` or legacy `visibility.json` metadata
+- domain-local observation models for the native and converted benchmark folders
 - plan extraction through parent pointers
 
 Next:
 
-- add additional converted-domain visibility models as needed
+- add richer domain observation models as needed
 - improve search heuristics beyond unsatisfied goal count

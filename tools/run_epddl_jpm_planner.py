@@ -19,7 +19,13 @@ if str(TOOLS_DIR) not in sys.path:
 
 from epddl_to_fpddl.common import CONVERTED_ROOT  # noqa: E402
 from epddl_to_fpddl.common import PLANK_BINARY as DEFAULT_HOST_PLANK_BINARY  # noqa: E402
-from epddl_to_fpddl.common import epddl_domain_name, fpddl_name, load_json, sanitize_epddl_inputs  # noqa: E402
+from epddl_to_fpddl.common import (  # noqa: E402
+    designated_labels,
+    epddl_domain_name,
+    fpddl_name,
+    load_json,
+    sanitize_epddl_inputs,
+)
 from epddl_to_fpddl.converters import CONVERTERS, convert_tiger_from_sources  # noqa: E402
 
 
@@ -401,6 +407,23 @@ def translate_tiger_action(action: str) -> str:
     return stem
 
 
+def translate_amc_action(action: str, task: dict[str, Any]) -> str:
+    parts = action.split()
+    if len(parts) != 2 or parts[0] not in {"ask_yes", "ask_no"}:
+        raise PlannerFailure(f"cannot translate Active Muddy Child action {action!r}")
+    target = parts[1]
+    translated = {
+        fpddl_name(agent): action_name
+        for action_name in task.get("actions", {}).keys()
+        if action_name.startswith("ask_")
+        for agent in task.get("language", {}).get("agents", [])
+        if action_name == f"ask_{agent}"
+    }.get(target)
+    if translated is None:
+        translated = f"ask_{target}"
+    return translated
+
+
 def deterministic_translation(domain_key: str, plan: list[str]) -> list[str] | None:
     if domain_key == "blocks-world":
         return list(plan)
@@ -460,13 +483,81 @@ def brute_force_amc_translation(
     libraries: list[Path],
     spec_path: Path | None,
 ) -> list[str] | None:
-    if any(action != "ask t" for action in jp_plan):
-        return None
+    direct_candidate: list[str] = []
+    for action in jp_plan:
+        if action == "ask t":
+            direct_candidate = []
+            break
+        try:
+            direct_candidate.append(translate_amc_action(action, task))
+        except PlannerFailure:
+            return None
+    if direct_candidate:
+        valid, _ = validate_epddl_plan(
+            plank_binary,
+            domain_path=domain_path,
+            problem_path=problem_path,
+            libraries=libraries,
+            spec_path=spec_path,
+            actions=direct_candidate,
+        )
+        if valid:
+            return direct_candidate
+
     action_names = sorted(
         name for name in task.get("actions", {}).keys() if name.startswith("ask_")
     )
     if not action_names:
         return None
+
+    candidates: list[list[str]] = []
+    goal = task.get("goal", {}).get("formula", {})
+    goal_index = goal.get("modality-index", []) if isinstance(goal, dict) else []
+    goal_atom = goal.get("formula") if isinstance(goal, dict) else None
+    if goal_index and isinstance(goal_atom, str):
+        target = goal_index[0]
+        target_action = f"ask_{target}"
+        labels = designated_labels(task)
+        muddy_actions = [
+            f"ask_{agent}"
+            for agent in task.get("language", {}).get("agents", [])
+            if f"muddy_{agent}" in labels and f"ask_{agent}" in action_names
+        ]
+        if target_action in action_names:
+            if goal_atom in labels:
+                ordered = [name for name in muddy_actions if name != target_action] + [target_action]
+            else:
+                ordered = muddy_actions + [target_action]
+            if len(ordered) == len(jp_plan):
+                candidates.append(ordered)
+
+            target_last = [name for name in action_names if name != target_action] + [target_action]
+            if len(target_last) == len(jp_plan):
+                candidates.append(target_last)
+
+    if len(action_names) == len(jp_plan):
+        candidates.append(action_names)
+
+    seen: set[tuple[str, ...]] = set()
+    for candidate in candidates:
+        key = tuple(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        valid, _ = validate_epddl_plan(
+            plank_binary,
+            domain_path=domain_path,
+            problem_path=problem_path,
+            libraries=libraries,
+            spec_path=spec_path,
+            actions=candidate,
+        )
+        if valid:
+            return candidate
+
+    if len(action_names) ** len(jp_plan) > 10000:
+        return None
+
     for candidate in itertools.product(action_names, repeat=len(jp_plan)):
         valid, _ = validate_epddl_plan(
             plank_binary,

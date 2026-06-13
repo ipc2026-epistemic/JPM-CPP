@@ -1,4 +1,4 @@
-#include "jpm/visibility.hpp"
+#include "jpm/observation.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -108,6 +108,13 @@ bool visible(
     return true;
 }
 
-const VisibilityModelRegistration registration("collaboration_through_communication", visible);
+std::vector<int> observe(
+    const Task &task,
+    const std::vector<int> &state,
+    const std::string &agent) {
+    return project_visible_state(task, state, agent, visible);
+}
+
+const ObservationModelRegistration registration("collaboration_through_communication", observe);
 
 }  // namespace

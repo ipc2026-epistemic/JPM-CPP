@@ -1,4 +1,4 @@
-#include "jpm/visibility.hpp"
+#include "jpm/observation.hpp"
 
 #include <stdexcept>
 
@@ -28,6 +28,13 @@ bool visible(
     throw std::runtime_error("grid_backup visibility does not know schema: " + var.schema);
 }
 
-const VisibilityModelRegistration registration("grid_backup", visible);
+std::vector<int> observe(
+    const Task &task,
+    const std::vector<int> &state,
+    const std::string &agent) {
+    return project_visible_state(task, state, agent, visible);
+}
+
+const ObservationModelRegistration registration("grid_backup", observe);
 
 }  // namespace

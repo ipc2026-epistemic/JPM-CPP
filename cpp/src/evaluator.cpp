@@ -1,6 +1,6 @@
 #include "jpm/evaluator.hpp"
 
-#include "jpm/visibility.hpp"
+#include "jpm/observation.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -99,13 +99,7 @@ const StateSequence &make_observation_sequence(
     StateSequence observations;
     observations.reserve(parent_sequence.size());
     for (const auto &state : parent_sequence) {
-        std::vector<int> observed = state;
-        for (int var_id = 0; var_id < static_cast<int>(task.variables.size()); ++var_id) {
-            if (!is_visible(task, state, agent, var_id)) {
-                observed[var_id] = UNSEEN_VALUE;
-            }
-        }
-        observations.push_back(std::move(observed));
+        observations.push_back(observe_state(task, state, agent));
     }
     auto [it, _inserted] = context.observations.emplace(std::move(key), std::move(observations));
     return it->second;

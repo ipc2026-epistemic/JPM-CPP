@@ -1,4 +1,4 @@
-#include "jpm/visibility.hpp"
+#include "jpm/observation.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -69,6 +69,13 @@ bool visible(
     throw std::runtime_error("new_corridor visibility does not know schema: " + var.schema);
 }
 
-const VisibilityModelRegistration registration("new_corridor", visible);
+std::vector<int> observe(
+    const Task &task,
+    const std::vector<int> &state,
+    const std::string &agent) {
+    return project_visible_state(task, state, agent, visible);
+}
+
+const ObservationModelRegistration registration("new_corridor", observe);
 
 }  // namespace

@@ -141,18 +141,25 @@ def iter_groundings(parameters: dict[str, str], types: dict[str, Any]) -> list[l
     return [list(zip(keys, values)) for values in itertools.product(*domains)]
 
 
-def load_visibility_config(domain_path: Path) -> dict[str, Any]:
-    config_path = domain_path.parent / "visibility.json"
+def load_observation_config(domain_path: Path) -> dict[str, Any]:
+    config_path = domain_path.parent / "observation.json"
     if not config_path.exists():
-        return {}
+        config_path = domain_path.parent / "visibility.json"
+        if not config_path.exists():
+            return {}
     with config_path.open() as f:
         config = json.load(f)
     if not isinstance(config, dict):
         raise ValueError(f"{config_path} must contain a JSON object")
-    visibility_model = config.get("visibility_model")
-    if not isinstance(visibility_model, str) or not visibility_model:
-        raise ValueError(f"{config_path} must define a non-empty visibility_model string")
-    return {"visibility_model": visibility_model}
+    observation_model = config.get("observation_model", config.get("visibility_model"))
+    if not isinstance(observation_model, str) or not observation_model:
+        raise ValueError(
+            f"{config_path} must define a non-empty observation_model or visibility_model string"
+        )
+    return {
+        "observation_model": observation_model,
+        "visibility_model": config.get("visibility_model", observation_model),
+    }
 
 
 def export_ir(domain_path: Path, problem_path: Path) -> dict[str, Any]:
@@ -208,7 +215,7 @@ def export_ir(domain_path: Path, problem_path: Path) -> dict[str, Any]:
                 }
             )
 
-    visibility_metadata = load_visibility_config(domain_path)
+    observation_metadata = load_observation_config(domain_path)
 
     return {
         "format": "jpm-ir-v1",
@@ -257,7 +264,7 @@ def export_ir(domain_path: Path, problem_path: Path) -> dict[str, Any]:
                 for effect in schema.effects.values()
             ),
             "nesting_base": None if nesting_base is None else sorted(nesting_base),
-            **visibility_metadata,
+            **observation_metadata,
             "rules": {
                 name: {
                     "type": enum_name(rule.rule_type),
