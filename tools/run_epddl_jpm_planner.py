@@ -386,7 +386,7 @@ def translate_consecutive_numbers_action(action: str) -> str:
     if len(parts) != 4 or parts[0] != "ann":
         raise PlannerFailure(f"cannot translate Consecutive-Numbers action {action!r}")
     _, actor, target, number = parts
-    return f"ann_{actor.upper()}_{target.upper()}_{number}"
+    return f"idk_{actor.upper()}_{target.upper()}_{number}"
 
 
 def translate_grapevine_action(action: str) -> str | None:

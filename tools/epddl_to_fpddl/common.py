@@ -182,6 +182,14 @@ def normalize_tiger_domain(domain_text: str) -> str:
     return text
 
 
+def remove_agent_constant(domain_text: str, agent_name: str) -> str:
+    pattern = re.compile(
+        r"\n\s*\(:constants\s+" + re.escape(agent_name) + r"\s*-\s*agent\s*\)\s*\n",
+        re.IGNORECASE,
+    )
+    return pattern.sub("\n", domain_text, count=1)
+
+
 def sanitize_epddl_inputs(
     domain_path: Path,
     problem_path: Path,
@@ -198,7 +206,7 @@ def sanitize_epddl_inputs(
     sanitized_problem = problem_text
 
     if domain_name == "blocks-world":
-        sanitized_domain = sanitized_domain.replace("\n    (:constants Robot - agent)\n", "\n")
+        sanitized_domain = remove_agent_constant(sanitized_domain, "Robot")
         sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Robot)\n")
     elif domain_name == "tiger":
         sanitized_domain = normalize_tiger_domain(sanitized_domain)

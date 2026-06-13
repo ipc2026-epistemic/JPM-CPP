@@ -293,21 +293,39 @@ def source_path(task: dict[str, Any], key: str) -> Path:
 
 
 def conjunction_atoms(formula: dict[str, Any] | str) -> list[str]:
+    return [atom for atom, truth in blocks_world_condition_literals(formula) if truth]
+
+
+def blocks_world_condition_literals(formula: dict[str, Any] | str) -> list[tuple[str, bool]]:
     if isinstance(formula, str):
         if formula == "true":
             return []
         if formula == "false":
             raise ValueError("unexpected false formula in conjunction context")
-        return [formula]
+        return [(formula, True)]
 
     connective = formula.get("connective")
-    if connective != "and":
-        raise ValueError(f"unsupported conjunction formula {formula!r}")
+    if connective == "and":
+        atoms: list[tuple[str, bool]] = []
+        for item in formula.get("formulas", []):
+            atoms.extend(blocks_world_condition_literals(item))
+        return atoms
+    if connective == "not" and isinstance(formula.get("formula"), str):
+        atom = formula["formula"]
+        if atom in {"true", "false"}:
+            raise ValueError(f"unexpected negated constant in Blocks-World formula {formula!r}")
+        return [(atom, False)]
+    if "modality-name" in formula:
+        return blocks_world_condition_literals(formula["formula"])
+    if connective in {"imply", "or"}:
+        # The current Blocks-World compilation is an optimistic finite-domain
+        # relaxation; modal/disjunctive guards are checked by EPDDL validation.
+        return []
+    raise ValueError(f"unsupported conjunction formula {formula!r}")
 
-    atoms: list[str] = []
-    for item in formula.get("formulas", []):
-        atoms.extend(conjunction_atoms(item))
-    return atoms
+
+def format_literal_condition(atom: str, truth: bool) -> str:
+    return f"            (= ({atom}) {quoted_tf(truth)})"
 
 
 def parse_blocks_world_initial_labels(task: dict[str, Any]) -> set[str]:
@@ -411,9 +429,10 @@ def render_blocks_world_domain(task: dict[str, Any]) -> str:
     for action_name, action in sorted(task["actions"].items()):
         event_name = action["events"][0]
         precondition_formula = action["preconditions"][event_name]["formula"]
-        precondition_atoms = conjunction_atoms(precondition_formula)
+        precondition_literals = blocks_world_condition_literals(precondition_formula)
         effect_lines: list[str] = []
-        for atom, effect in sorted(action["effects"][event_name].items()):
+        event_effects = action["effects"].get(event_name) or {}
+        for atom, effect in sorted(event_effects.items()):
             truth = constant_blocks_world_effect(effect, atom)
             effect_lines.append(f"            (assign ({atom}) {quoted_tf(truth)})")
 
@@ -422,7 +441,7 @@ def render_blocks_world_domain(task: dict[str, Any]) -> str:
                 f"    (:action {action_name}",
                 "        :parameters ()",
                 "        :precondition (and",
-                *[f"            (= ({atom}) 't')" for atom in precondition_atoms],
+                *[format_literal_condition(atom, truth) for atom, truth in precondition_literals],
                 "        )",
                 "        :effect (and",
                 *effect_lines,
@@ -454,7 +473,7 @@ def render_blocks_world_domain(task: dict[str, Any]) -> str:
 def render_blocks_world_problem(task: dict[str, Any], problem_name: str) -> str:
     atoms = list(task["language"]["atoms"])
     initial_labels = parse_blocks_world_initial_labels(task)
-    goal_atoms = conjunction_atoms(task["goal"]["formula"])
+    goal_literals = blocks_world_condition_literals(task["goal"]["formula"])
     agents = lower_agents(task)
 
     lines: list[str] = [
@@ -474,7 +493,7 @@ def render_blocks_world_problem(task: dict[str, Any], problem_name: str) -> str:
         "    )",
         "",
         "    (:goal (and",
-        *[f"        (= ({atom}) 't')" for atom in goal_atoms],
+        *[f"        (= ({atom}) {quoted_tf(truth)})" for atom, truth in goal_literals],
         "    ))",
         "",
         "    (:ranges",
