@@ -256,29 +256,119 @@ def is_hard_gossip_task(task: dict[str, Any]) -> bool:
     )
 
 
-def render_hard_gossip_domain(task: dict[str, Any]) -> str:
+def hard_gossip_roles(task: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
     available = set(task["actions"])
     sequence = [action for action in HARD_GOSSIP_SEQUENCE if action in available]
     if len(sequence) != len(HARD_GOSSIP_SEQUENCE):
         missing = sorted(set(HARD_GOSSIP_SEQUENCE) - available)
         raise ValueError(f"Hard Gossip converter is missing expected actions: {missing}")
 
+    detectives: set[str] = set()
+    impostors: set[str] = set()
+    normals: set[str] = set()
+    for action_name in sequence:
+        if action_name.startswith("give-earpiece_"):
+            detective, normal = action_name[len("give-earpiece_") :].split("_", 1)
+            detectives.add(detective)
+            normals.add(normal)
+        elif action_name.startswith("lie_"):
+            impostor, normal = action_name[len("lie_") :].split("_", 1)
+            impostors.add(impostor)
+            normals.add(normal)
+        elif action_name.startswith("catch_"):
+            detective, impostor = action_name[len("catch_") :].split("_", 1)
+            detectives.add(detective)
+            impostors.add(impostor)
+
+    return sorted(normals), sorted(detectives), sorted(impostors)
+
+
+def render_hard_gossip_domain(task: dict[str, Any]) -> str:
+    available = set(task["actions"])
+    normals, detectives, impostors = hard_gossip_roles(task)
+
     action_lines: list[str] = []
-    for index, action_name in enumerate(sequence):
-        action_lines.extend(
-            [
-                f"    (:action {action_name}",
-                "        :parameters ()",
-                "        :precondition (and",
-                f"            (= (progress) {index})",
-                "        )",
-                "        :effect (and",
-                f"            (assign (progress) {index + 1})",
-                "        )",
-                "    )",
-                "",
+    for detective in detectives:
+        for normal in normals:
+            action_name = f"give-earpiece_{detective}_{normal}"
+            if action_name not in available:
+                continue
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (role {detective}) 'detective')",
+                    f"            (= (role {normal}) 'normal')",
+                    f"            (= (spying {normal}) 'f')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (spying {normal}) 't')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+
+    for impostor in impostors:
+        for normal in normals:
+            action_name = f"lie_{impostor}_{normal}"
+            if action_name not in available:
+                continue
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    f"            (= (role {impostor}) 'impostor')",
+                    f"            (= (role {normal}) 'normal')",
+                    f"            (= (secret_value {impostor}) 't')",
+                    f"            (= (belief {normal} {impostor}) 'unknown')",
+                    "        )",
+                    "        :effect (and",
+                    f"            (assign (belief {normal} {impostor}) 'f')",
+                    f"            (assign (impostor_view {impostor} {normal}) 'f')",
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
+
+    for detective in detectives:
+        for impostor in impostors:
+            action_name = f"catch_{detective}_{impostor}"
+            if action_name not in available:
+                continue
+            preconditions = [
+                f"            (= (role {detective}) 'detective')",
+                f"            (= (role {impostor}) 'impostor')",
+                f"            (= (secret_value {impostor}) 't')",
+                f"            (= (belief {detective} {impostor}) 'unknown')",
+                *[f"            (= (spying {normal}) 't')" for normal in normals],
+                *[f"            (= (belief {normal} {impostor}) 'f')" for normal in normals],
             ]
-        )
+            effects = [
+                f"            (assign (belief {detective} {impostor}) 't')",
+                *[f"            (assign (belief {normal} {impostor}) 't')" for normal in normals],
+                *[
+                    f"            (assign (impostor_view {impostor} {normal}) 'f')"
+                    for normal in normals
+                ],
+            ]
+            action_lines.extend(
+                [
+                    f"    (:action {action_name}",
+                    "        :parameters ()",
+                    "        :precondition (and",
+                    *preconditions,
+                    "        )",
+                    "        :effect (and",
+                    *effects,
+                    "        )",
+                    "    )",
+                    "",
+                ]
+            )
 
     lines = [
         "(define",
@@ -289,7 +379,11 @@ def render_hard_gossip_domain(task: dict[str, Any]) -> str:
         "    )",
         "",
         "    (:functions",
-        "        (progress)",
+        "        (role ?a - agent)",
+        "        (secret_value ?a - agent)",
+        "        (spying ?a - agent)",
+        "        (belief ?observer - agent ?owner - agent)",
+        "        (impostor_view ?impostor - agent ?normal - agent)",
         "    )",
         "",
         *action_lines,
@@ -301,6 +395,18 @@ def render_hard_gossip_domain(task: dict[str, Any]) -> str:
 
 def render_hard_gossip_problem(task: dict[str, Any], problem_name: str) -> str:
     agents = list(task["language"]["agents"])
+    normals, detectives, impostors = hard_gossip_roles(task)
+    role_by_agent = {
+        **{agent: "normal" for agent in normals},
+        **{agent: "detective" for agent in detectives},
+        **{agent: "impostor" for agent in impostors},
+    }
+    goal_lines: list[str] = []
+    for impostor in impostors:
+        for normal in normals:
+            goal_lines.append(f"        (= (belief {normal} {impostor}) 't')")
+            goal_lines.append(f"        (= (impostor_view {impostor} {normal}) 'f')")
+
     lines = [
         "(define",
         f"    (problem {problem_name})",
@@ -314,22 +420,47 @@ def render_hard_gossip_problem(task: dict[str, Any], problem_name: str) -> str:
         "    )",
         "",
         "    (:init",
-        "        (assign (progress) 0)",
-        "    )",
-        "",
-        "    (:goal (and",
-        f"        (= (progress) {len(HARD_GOSSIP_SEQUENCE)})",
-        "    ))",
-        "",
-        "    (:ranges",
-        f"        (progress integer [0,{len(HARD_GOSSIP_SEQUENCE)}])",
-        "    )",
-        "",
-        "    (:rules",
-        "    )",
-        ")",
-        "",
     ]
+    for agent in agents:
+        lines.append(f"        (assign (role {agent}) '{role_by_agent.get(agent, 'none')}')")
+    for agent in agents:
+        secret = "t" if agent in normals or agent in impostors else "f"
+        lines.append(f"        (assign (secret_value {agent}) '{secret}')")
+    for agent in agents:
+        lines.append(f"        (assign (spying {agent}) 'f')")
+    for observer in agents:
+        for owner in agents:
+            if observer == owner and (owner in normals or owner in impostors):
+                belief = "t"
+            else:
+                belief = "unknown"
+            lines.append(f"        (assign (belief {observer} {owner}) '{belief}')")
+    for impostor in impostors:
+        for normal in normals:
+            lines.append(f"        (assign (impostor_view {impostor} {normal}) 'unknown')")
+
+    lines.extend(
+        [
+            "    )",
+            "",
+            "    (:goal (and",
+            *goal_lines,
+            "    ))",
+            "",
+            "    (:ranges",
+            "        (role enumerate ['normal','detective','impostor','none'])",
+            "        (secret_value enumerate ['t','f'])",
+            "        (spying enumerate ['t','f'])",
+            "        (belief enumerate ['t','f','unknown'])",
+            "        (impostor_view enumerate ['t','f','unknown'])",
+            "    )",
+            "",
+            "    (:rules",
+            "    )",
+            ")",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 

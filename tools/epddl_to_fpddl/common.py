@@ -253,9 +253,6 @@ def sanitize_epddl_inputs(
     if domain_name == "blocks-world":
         sanitized_domain = remove_agent_constant(sanitized_domain, "Robot")
         sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Robot)\n")
-    elif domain_name == "gossip":
-        sanitized_domain = normalize_gossip_domain(sanitized_domain)
-        sanitized_problem = normalize_gossip_problem(sanitized_problem)
     elif domain_name == "tiger":
         sanitized_domain = normalize_tiger_domain(sanitized_domain)
         sanitized_problem = inject_problem_agents(sanitized_problem, "    (:agents Knight)\n")
