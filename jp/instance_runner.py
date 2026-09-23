@@ -8,11 +8,11 @@ import os
 import sys
 import traceback
 from optparse import OptionParser
-import pytz
 import time
 import gc
 
 import logging
+from timezone_compat import load_timezone
 # import forward_pddl_model as pddl_model
 # import pddl_model as pddl_model
 from pddl_model import Problem
@@ -23,7 +23,7 @@ from pddl_parser import PDDLParser
 # import util
 from util import setup_logger_handlers,setup_logger
 
-TIMEZONE = pytz.timezone('Australia/Melbourne')
+TIMEZONE = load_timezone('Australia/Melbourne')
 DATE_FORMAT = '%d-%m-%Y_%H-%M-%S'
 LOGGER_NAME = "instance_runner"
 LOGGER_LEVEL = logging.INFO

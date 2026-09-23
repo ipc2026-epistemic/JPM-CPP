@@ -1,12 +1,12 @@
 import os
 import logging
 import datetime
-import pytz
 import re
 import traceback
 import typing
+from timezone_compat import load_timezone
 
-TIMEZONE = pytz.timezone('Australia/Melbourne')
+TIMEZONE = load_timezone('Australia/Melbourne')
 DATE_FORMAT = '%d-%m-%Y_%H-%M-%S'
 timestamp = datetime.datetime.now().astimezone(TIMEZONE).strftime(DATE_FORMAT)
 # logging.basicConfig(filename =f'logs/{timestamp}.log', level =logging.DEBUG)

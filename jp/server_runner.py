@@ -23,8 +23,8 @@ import sys
 import time
 import traceback
 from optparse import OptionParser
-import pytz
 from utils.pddl_generator import rank_to_combination,write_one_problems
+from timezone_compat import load_timezone
 
 
 
@@ -33,7 +33,7 @@ from util import setup_logger_handlers,setup_logger
 # from latex_converter import LatexConverter
 import instance_runner
 
-TIMEZONE = pytz.timezone('Australia/Melbourne')
+TIMEZONE = load_timezone('Australia/Melbourne')
 DATE_FORMAT = '%d-%m-%Y_%H-%M-%S'
 
 

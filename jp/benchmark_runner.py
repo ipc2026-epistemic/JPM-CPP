@@ -12,13 +12,12 @@ import time
 import traceback
 from typing import Any
 
-import pytz
-
 from benchmark_config import PROJECT_ROOT, BenchmarkJob, build_benchmark_jobs, load_benchmark_suite
+from timezone_compat import load_timezone
 from util import setup_logger, setup_logger_handlers
 
 
-TIMEZONE = pytz.timezone("Australia/Melbourne")
+TIMEZONE = load_timezone("Australia/Melbourne")
 DATE_FORMAT = "%d-%m-%Y_%H-%M-%S"
 LOGGER_NAME = "benchmark_runner"
 PROCESS_TIMEOUT_GRACE_SECONDS = 10
