@@ -308,7 +308,7 @@ def solve_with_cpp(
     print("Solving...")
     run_checked(
         [
-            "python3",
+            sys.executable,
             str(exporter),
             "-d",
             str(domain_path),

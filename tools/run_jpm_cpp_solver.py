@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -41,7 +42,7 @@ def main() -> int:
     args = parser.parse_args()
 
     export_cmd = [
-        "python3",
+        sys.executable,
         str(JPM_ROOT / "tools" / "export_jpm_ir.py"),
         "-d",
         str(args.domain),
